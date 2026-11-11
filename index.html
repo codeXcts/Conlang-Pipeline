@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-08-0548">
+<meta name="build" content="build 2026-11-11-1457">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -124,6 +124,19 @@ table.chart td{min-width:64px;white-space:nowrap}
 .updown button[disabled]{opacity:.35}
 .spellout{font-size:22px}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:0 4px}
+.pathcard{display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:16px;padding:16px;margin:0 0 12px;font-size:15px;line-height:1.45}
+.pathcard b{display:block;font-size:19px;margin-bottom:4px}
+.pathcard:active{border-color:var(--accent)}
+details.cc{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:8px 12px;margin:8px 0 10px}
+details.cc summary{font-weight:600;cursor:pointer;padding:2px 0}
+.ccrow{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:8px 0}
+.ccrow .grow{flex:1;min-width:0}
+.ccst{text-align:right;max-width:40%}
+.okmark{color:var(--accent);font-size:13px;white-space:nowrap}
+.btn.small{padding:4px 9px;font-size:13px}
+.linked{color:var(--accent)}
+.guiderow{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:transparent;padding:7px 0}
+.shares{margin:2px 0 6px;line-height:1.9}
 .freqrow{display:grid;grid-template-columns:34px 1fr auto;gap:8px;align-items:center;margin:3px 0}
 .freqrow.off .fnum{color:var(--warn)}
 .fsym{font-size:18px;text-align:center}
@@ -234,13 +247,13 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-08-0548 (made on build 2026-11-08-0540)
+   Conlang Pipeline — build 2026-11-11-1457 (made on build 2026-11-10-2321)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-08-0548";
-const BASE_BUILD = "build 2026-11-08-0540";
+const BUILD = "build 2026-11-11-1457";
+const BASE_BUILD = "build 2026-11-10-2321";
 const FORMAT = "conlang-pipeline";
-const VERSION = 2;
+const VERSION = 3;
 const STORE_KEY = "conlang-pipeline:autosave";
 const META_KEY = "conlang-pipeline:meta";   // { lastExport, dirtySince } — tool state, not language data
 const UI_KEY = "conlang-pipeline:ui";       // { soundView } — tool state, not language data
@@ -255,13 +268,14 @@ function skeleton() {
     sounds: { consonants: {}, vowels: {} },
     orthography: { basis: "modern", spellings: {}, rules: [] },
     syllables: {
-      classes: { C: { members: [], auto: true }, V: { members: [], auto: true } },
+      classes: { C: { members: [], follows: "consonants", note: "All your consonants." }, V: { members: [], follows: "vowels", note: "All your vowels." } },
+      declined: [],
       shapes: { any: [], initial: [], medial: [], final: [] },
       rootLength: { min: 1, max: 2, weights: {} }
     },
     partsOfSpeech: {},
     shapes: [],
-    proto: { enabled: true, eras: [] },
+    proto: { enabled: null, eras: [] },
     comfort: { learned: {} },
     meanings: [],
     lexicon: [],
@@ -277,10 +291,31 @@ const MAP_PATHS = new Set([
 const SOUND_KEYS = ["label", "example", "audio", "group", "custom", "weight"];
 const LEX_STATUS = ["live", "vetoed", "locked"];
 
-// Format migrations: MIGRATIONS[n] turns a version-n file into version n+1. None yet.
+// Characters a sound symbol can't contain: A–Z are class letters; the rest are rule and pattern notation (| is the meaning-sheet column separator).
+const BAD_SYMBOL_CHARS = /[A-Z#_\/>∅…()|]/;
+function badSymbolChar(sym) { const m = BAD_SYMBOL_CHARS.exec(String(sym)); return m ? m[0] : null; }
+
+// Format migrations: MIGRATIONS[n] turns a version-n file into version n+1.
 const MIGRATIONS = {
   // 1 → 2: add the spelling block. Nothing else changes.
-  1: d => { if (!("orthography" in d)) d.orthography = { basis: "modern", spellings: {}, rules: [] }; return d; }
+  1: d => { if (!("orthography" in d)) d.orthography = { basis: "modern", spellings: {}, rules: [] }; return d; },
+  // 2 → 3: classes get `follows` (replaces `auto`) and `note`; syllables get `declined`; the path is asked again
+  // when no sound-change rules exist (the old default of true was never a real choice).
+  2: d => {
+    const cl = d.syllables && d.syllables.classes;
+    if (isObj(cl)) for (const [L, c] of Object.entries(cl)) if (isObj(c)) {
+      const f = c.auto === true ? (L === "C" ? "consonants" : L === "V" ? "vowels" : null) : null;
+      const nc = { members: Array.isArray(c.members) ? c.members : [], follows: f, note: f === "consonants" ? "All your consonants." : f === "vowels" ? "All your vowels." : "" };
+      for (const k of Object.keys(c)) if (!["members", "auto", "follows", "note"].includes(k)) nc[k] = c[k];
+      cl[L] = nc;
+    }
+    if (isObj(d.syllables) && !Array.isArray(d.syllables.declined)) d.syllables.declined = [];
+    if (isObj(d.proto)) {
+      const hasRules = Array.isArray(d.proto.eras) && d.proto.eras.some(e => isObj(e) && Array.isArray(e.changes) && e.changes.length);
+      if (!hasRules) d.proto.enabled = null;
+    }
+    return d;
+  }
 };
 
 /* ---------------- Sound catalog (tool data, not language data) ---------------- */
@@ -477,7 +512,7 @@ PRESETS.forEach(p => { for (const k of ["consonants", "vowels"]) p[k] = p[k].nor
 const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const clone = v => JSON.parse(JSON.stringify(v));
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const normSym = s => String(s || "").trim().normalize("NFC").replace(/g/g, "ɡ");
+const normSym = s => String(s || "").trim().normalize("NFC").replace(/g/g, "ɡ").replace(/:/g, "ː");
 
 /* ---------------- Serializer: fixed key order, one entry per line ---------------- */
 const SOUND_NODE = { order: SOUND_KEYS, compact: true };
@@ -490,8 +525,8 @@ const SCHEMA = {
       consonants: { map: SOUND_NODE, sortKeys: true },
       vowels: { map: SOUND_NODE, sortKeys: true }
     }},
-    syllables: { order: ["classes","shapes","rootLength"], kids: {
-      classes: { map: { order: ["members","auto"], compact: true } },
+    syllables: { order: ["classes","declined","shapes","rootLength"], kids: {
+      classes: { map: { order: ["members","follows","note"], compact: true } },
       shapes: { order: ["any","initial","medial","final"], kids: {
         any: { items: { order: ["pattern","weight"], compact: true } },
         initial: { items: { order: ["pattern","weight"], compact: true } },
@@ -563,7 +598,7 @@ function walkTemplate(t, tpl, path, errors, warnings) {
       if (!isObj(v)) errors.push(`"${p}" should be an object.`);
       else if (!MAP_PATHS.has(p)) walkTemplate(v, tv, p, errors, warnings);
     }
-    else if (typeof v !== typeof tv) errors.push(`"${p}" should be a ${typeof tv}, found ${v === null ? "null" : typeof v}.`);
+    else if (tv !== null && typeof v !== typeof tv) errors.push(`"${p}" should be a ${typeof tv}, found ${v === null ? "null" : typeof v}.`);
   }
   if (!MAP_PATHS.has(path)) for (const k of Object.keys(t))
     if (!(k in tpl)) warnings.push(`Unknown field "${path ? path + "." : ""}${k}" — kept as it is.`);
@@ -577,6 +612,7 @@ function checkSounds(data, errors, warnings) {
       const e = map[sym], where = `sounds.${kind}["${sym}"]`, cat = CAT.get(sym);
       if (!isObj(e)) { errors.push(`${where} should be an object.`); continue; }
       if (seen[sym]) warnings.push(`"${sym}" is listed as both a consonant and a vowel.`);
+      if (badSymbolChar(sym)) warnings.push(`${where}: the symbol contains "${badSymbolChar(sym)}", which rules and patterns read as notation (capital letters are class names). Rename the sound.`);
       seen[sym] = true;
       const defaults = { label: cat ? cat.label : "", example: cat ? cat.example : "", audio: null, group: cat ? cat.group : "", custom: !cat, weight: 1 };
       for (const k of SOUND_KEYS) if (!(k in e)) { e[k] = defaults[k]; warnings.push(`${where} was missing "${k}" — filled with ${JSON.stringify(defaults[k])}.`); }
@@ -674,15 +710,62 @@ function expandPattern(src) {
   } catch (e) { return { error: String(e) }; }
 }
 function patternClasses(pattern) { return [...new Set(String(pattern).replace(/[^A-Z]/g, "").split(""))].filter(Boolean); }
-// C and V with auto: true follow the inventory.
-function syncAutoClasses(lang) {
-  const cl = lang && lang.syllables && lang.syllables.classes;
-  if (!isObj(cl) || !isObj(lang.sounds)) return;
-  const ord = x => CAT.has(x) ? CAT.get(x).order : 1e6;
-  for (const [L, kind] of [["C", "consonants"], ["V", "vowels"]])
-    if (isObj(cl[L]) && cl[L].auto === true && isObj(lang.sounds[kind]))
-      cl[L].members = Object.keys(lang.sounds[kind]).sort((a, b) => ord(a) - ord(b));
+/* ---------------- Class groups (decision 17) ----------------
+   The conventional classes are created automatically from the chosen sounds and follow them. */
+const CLASS_GROUPS = [
+  { id: "consonants", letter: "C", name: "Consonants", note: "All your consonants." },
+  { id: "vowels", letter: "V", name: "Vowels", note: "All your vowels." },
+  { id: "nasal", letter: "N", name: "Nasals", note: "Sounds hummed through the nose, like m, n, ng." },
+  { id: "liquid", letter: "L", name: "Liquids", note: "l-like and r-like sounds." },
+  { id: "stop", letter: "P", name: "Stops", note: "Air fully blocked, then released, like p, t, k, b, d, g." },
+  { id: "fricative", letter: "F", name: "Fricatives", note: "Air pushed through a narrow gap, like f, s, th, h." },
+  { id: "sibilant", letter: "S", name: "Sibilants", note: "Hissing and hushing sounds, like s, z, sh, ts, ch." },
+  { id: "affricate", letter: "A", name: "Affricates", note: "A stop that releases into a hiss, like ts, ch, j." },
+  { id: "glide", letter: "G", name: "Glides", note: "Vowel-like consonants, like y and w." }
+];
+const GROUP_BY_ID = Object.fromEntries(CLASS_GROUPS.map(g => [g.id, g]));
+const RLIKE = /^[rɾɹɽʁʀɻ]/, SIB = /[szʃʒɕʑʂʐ]/;
+// Which groups a chosen sound belongs to. Built-in tiles use the catalog's manner; "+ Add sound" sounds only get C or V.
+function soundGroups(lang, sym) {
+  if (sym in lang.sounds.vowels) return ["vowels"];
+  if (!(sym in lang.sounds.consonants)) return [];
+  const out = ["consonants"], c = CAT.get(sym);
+  if (!c || c.kind !== "consonants") return out;
+  const m = c.manner;
+  if (m === "nasal") out.push("nasal");
+  if (m === "lateral approximant" || RLIKE.test(sym)) out.push("liquid");
+  if (m === "plosive") out.push("stop");
+  if (m === "fricative" || m === "lateral fricative") out.push("fricative");
+  if ((m === "fricative" || m === "affricate") && SIB.test(sym)) out.push("sibilant");
+  if (m === "affricate") out.push("affricate");
+  if (m === "approximant" && !RLIKE.test(sym)) out.push("glide");
+  return out;
 }
+function groupMembers(lang, gid) {
+  const ord = x => CAT.has(x) ? CAT.get(x).order : 1e6;
+  return [...Object.keys(lang.sounds.consonants), ...Object.keys(lang.sounds.vowels)].filter(x => soundGroups(lang, x).includes(gid)).sort((a, b) => ord(a) - ord(b));
+}
+// Keep linked classes in step with the sounds, and create missing groups (unless declined or the letter is taken).
+function syncClasses(lang) {
+  const sy = lang && lang.syllables;
+  if (!isObj(sy) || !isObj(sy.classes) || !isObj(lang.sounds)) return;
+  if (!Array.isArray(sy.declined)) sy.declined = [];
+  const cl = sy.classes;
+  for (const [L, c] of Object.entries(cl)) if (isObj(c) && c.follows && GROUP_BY_ID[c.follows]) {
+    c.members = groupMembers(lang, c.follows);
+    const g = GROUP_BY_ID[c.follows];
+    if (!c.members.length && c.follows !== "consonants" && c.follows !== "vowels" && (!c.note || c.note === g.note)) delete cl[L];
+  }
+  for (const g of CLASS_GROUPS) {
+    if (sy.declined.includes(g.id)) continue;
+    if (Object.values(cl).some(c => isObj(c) && c.follows === g.id)) continue;
+    const mem = groupMembers(lang, g.id);
+    if (!mem.length && g.id !== "consonants" && g.id !== "vowels") continue;
+    if (g.letter in cl) continue;
+    cl[g.letter] = { members: mem, follows: g.id, note: g.note };
+  }
+}
+function syncAutoClasses(lang) { syncClasses(lang); }
 function checkSyllables(data, errors, warnings) {
   const sy = data.syllables; if (!isObj(sy)) return;
   const classes = isObj(sy.classes) ? sy.classes : {};
@@ -692,9 +775,9 @@ function checkSyllables(data, errors, warnings) {
     if (!CLASS_RE.test(k)) warnings.push(`${w}: class names should be one capital letter, or patterns can't use it.`);
     if (!isObj(c)) { errors.push(`${w} should be an object.`); continue; }
     if (!Array.isArray(c.members) || c.members.some(m => typeof m !== "string")) { errors.push(`${w}.members should be a list of sounds.`); continue; }
-    if (typeof c.auto !== "boolean") errors.push(`${w}.auto should be true or false.`);
-    if (c.auto === true && k !== "C" && k !== "V") warnings.push(`${w} is marked as following the inventory, but only C and V can; treated as a normal class.`);
-    if (!(c.auto === true && (k === "C" || k === "V"))) {
+    if (c.follows !== null && !(typeof c.follows === "string" && GROUP_BY_ID[c.follows])) warnings.push(`${w}.follows is "${c.follows}", which isn't a known group; treated as a fixed class.`);
+    if (typeof c.note !== "string") warnings.push(`${w}.note should be text.`);
+    if (!(c.follows && GROUP_BY_ID[c.follows])) {
       let ever = new Set(Object.keys(inv));
       try { const ei = eraInventories(data); for (const e of ei.eras) for (const x of e.inventory) ever.add(x); } catch (e) {}
       const missing = c.members.filter(m => !ever.has(m));
@@ -749,8 +832,8 @@ function shapeWeights(list) {
   return m;
 }
 
-/* ---------------- Rule notation (shared by spelling now, sound changes next) ----------------
-   "X > Y / A_B": X is one or more sounds; Y is the output; A and B are the context.
+/* ---------------- Rule notation (shared by spelling and sound changes) ----------------
+   "X > Y / A_B": X is one or more sounds; Y is the output; A and B are the context. ∅ on the right = nothing (silent, in spelling).
    Context tokens: sounds, class letters, # for the word edge. No context = everywhere. */
 const NOTHING = new Set(["∅", "0"]);
 function hash32(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
@@ -823,7 +906,7 @@ function parseRule(src, env, opts) {
     }
     if (mode === "spelling") {
       const target = tokenizeSide(lhs, env, { classes: false, edges: false });
-      return { target, repl: rhs, left, right };
+      return { target, repl: rhs === "∅" ? "" : rhs, left, right };
     }
     let target = tokenizeSide(lhs, env, { classes: true, edges: false, nothing: true });
     let insert = false;
@@ -901,7 +984,8 @@ function applyChange(pr, segs, env) {
 let _eraMemo = { key: null, val: null };
 function eraInventories(lang) {
   const key = JSON.stringify([lang.sounds, lang.syllables.classes, lang.proto]);
-  if (_eraMemo.key === key) return _eraMemo.val;
+  // Same text is not enough: the cached era objects must belong to this language object, or a copy's eras leak out.
+  if (_eraMemo.key === key && _eraMemo.eras === (lang.proto && lang.proto.eras)) return _eraMemo.val;
   const base = langEnv(lang), protoInv = [...base.symbols], catalog = [...CAT.keys()];
   const order = protoInv.slice(), set = new Set(protoInv), eras = [];
   const add = x => { if (!set.has(x)) { set.add(x); order.push(x); } };
@@ -929,7 +1013,7 @@ function eraInventories(lang) {
     eras.push({ era, rules, inventory: order.slice() });
   }
   const val = { proto: protoInv, eras, modern: lang.proto && lang.proto.enabled ? order.slice() : protoInv.slice() };
-  _eraMemo = { key, val };
+  _eraMemo = { key, val, eras: lang.proto && lang.proto.eras };
   return val;
 }
 // Run a proto-form through every era. Patchy rules (< 100%) pick words by a hash of the proto-form and the rule,
@@ -988,7 +1072,8 @@ function unspelledSounds(lang) {
 }
 function checkProto(data, errors, warnings) {
   const pr = data.proto; if (!isObj(pr) || !Array.isArray(pr.eras)) return;
-  const ids = new Set(), before = errors.length;
+  const ids = new Set();
+  if (!(pr.enabled === true || pr.enabled === false || pr.enabled === null)) errors.push(`proto.enabled should be true (proto path), false (modern path) or null (not chosen yet).`);
   pr.eras.forEach((e, i) => {
     const w = `proto.eras[${i}]`;
     if (!isObj(e)) { errors.push(`${w} should be an object.`); return; }
@@ -1070,7 +1155,7 @@ function buildGenerator(lang) {
     else space += posSum(maps.initial) * Math.pow(posSum(maps.medial), Math.max(0, n - 2)) * posSum(maps.final);
   }
   return {
-    notes, space,
+    notes, space, maps, members,
     gen(rng) {
       const n = pickWeighted(rng, lengths), syls = [], shapes = [];
       for (let i = 0; i < n; i++) {
@@ -1082,6 +1167,35 @@ function buildGenerator(lang) {
       return { proto: syls.join(""), syllables: syls, shapes };
     }
   };
+}
+// The syllable shapes of a proto-form under the current rules (finding the split the generator could have made,
+// with the highest pattern weights). Saved words don't store their shapes, so learning on the veto screen uses this.
+// Returns [] when the word no longer fits the rules.
+function syllableShapes(lang, proto, g) {
+  g = g || buildGenerator(lang);
+  if (g.error) return [];
+  const segs = segmentWord(proto, langEnv(lang)), n = segs.length, rl = lang.syllables.rootLength;
+  const inCls = {}; for (const [L, list] of Object.entries(g.members)) inCls[L] = new Set(list.map(x => x[0]));
+  const shapes = new Set([...g.maps.mono.keys(), ...g.maps.initial.keys(), ...g.maps.medial.keys(), ...g.maps.final.keys()]);
+  const fits = (sh, i) => i + sh.length <= n && [...sh].every((L, k) => inCls[L] && inCls[L].has(segs[i + k]));
+  const memo = new Map();
+  const best = (i, k) => { // best split of segs[i..] where the next syllable is number k (0-based)
+    const key = i + "," + k; if (memo.has(key)) return memo.get(key);
+    let out = null;
+    if (k < rl.max) for (const sh of shapes) {
+      if (!fits(sh, i)) continue;
+      const end = i + sh.length, pos = i === 0 ? (end === n ? "mono" : "initial") : (end === n ? "final" : "medial");
+      const w = g.maps[pos].get(sh); if (!w) continue;
+      let cand = null;
+      if (end === n) { if (k + 1 >= rl.min) cand = { score: Math.log(w), shapes: [sh] }; }
+      else { const rest = best(end, k + 1); if (rest) cand = { score: Math.log(w) + rest.score, shapes: [sh].concat(rest.shapes) }; }
+      if (cand && (!out || cand.score > out.score)) out = cand;
+    }
+    memo.set(key, out);
+    return out;
+  };
+  const r = n ? best(0, 0) : null;
+  return r ? r.shapes : [];
 }
 // Distinct words not already in the lexicon (identical forms are blocked).
 function sampleWords(lang, count, seed) {
@@ -1374,9 +1488,11 @@ function learnFrom(lang, w, dir, scale) {
   scale = scale == null ? 1 : scale;
   const L = lang.comfort.learned, segs = [...new Set(segmentWord(w.proto, langEnv(lang)))];
   if (!segs.length) return;
+  // Sample words carry their shapes; saved lexicon entries don't, so work them out (before anything learned changes).
+  const shapes = Array.isArray(w.shapes) ? w.shapes : syllableShapes(lang, w.proto);
   const step = 0.3 * scale / segs.length * dir;
   for (const x of segs) L[x] = clampLearned((L[x] || 0) + step);
-  for (const sh of new Set(w.shapes || [])) L[sh] = clampLearned((L[sh] || 0) + 0.1 * scale * dir);
+  for (const sh of new Set(shapes)) L[sh] = clampLearned((L[sh] || 0) + 0.1 * scale * dir);
   for (const k of Object.keys(L)) if (L[k] === 0) delete L[k];
 }
 function comfortScore(lang, proto) {
@@ -1407,9 +1523,9 @@ function generateLexicon(lang, seed) {
   if (!empty.length) return { added: 0, unfilled: [], notes: [] };
   const rng = makeRng(seed >>> 0), env = langEnv(lang);
   const takenP = new Set(), takenS = new Set(), existing = [];
-  for (const w of lang.lexicon) if (isObj(w)) { takenP.add(w.proto); takenS.add(w.surface); if (w.status !== "vetoed") existing.push(segmentWord(w.surface, envWith(env, [...env.symbols, ...CAT.keys()]))); }
-  const want = Math.ceil(empty.length * 2.5) + 20, pool = [];
   const segEnv = envWith(env, [...env.symbols, ...CAT.keys()]);
+  for (const w of lang.lexicon) if (isObj(w)) { takenP.add(w.proto); takenS.add(w.surface); if (w.status !== "vetoed") existing.push(segmentWord(w.surface, segEnv)); }
+  const want = Math.ceil(empty.length * 2.5) + 20, pool = [];
   for (let tries = 0; pool.length < want && tries < want * 60; tries++) {
     const w = g.gen(rng);
     if (takenP.has(w.proto)) continue;
@@ -1461,7 +1577,6 @@ function replacementFor(lang, slotId, targetLen, seed) {
   cands.sort((a, b) => Math.abs(a.len - targetLen) - Math.abs(b.len - targetLen) || b.comfort - a.comfort);
   return cands[0];
 }
-function nextWordNum(lang) { let n = 0; for (const w of lang.lexicon) { const r = isObj(w) && /^w(\d+)$/.exec(w.id); if (r) n = Math.max(n, Number(r[1])); } return n + 1; }
 // Live or locked words one sound apart from this one.
 function nearTwinsOf(lang, entry) {
   const env = langEnv(lang), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]), mine = segmentWord(entry.surface, segEnv);
@@ -1497,13 +1612,14 @@ function mergeMeaningSheet(lang, text) {
     if (f.length < 4 || !/^w\d+$/.test(f[0])) { st.bad++; continue; }
     const e = next.lexicon.find(w => isObj(w) && w.id === f[0] && w.status !== "vetoed");
     if (!e) { st.unknown.push(f[0]); continue; }
-    const gloss = f.slice(3).join(" | ").trim();
+    // Read from both ends: a spelling may contain |, a meaning can't. So the meaning is the last column and the part of speech the one before.
+    const gloss = f[f.length - 1], posTxt = f[f.length - 2];
     if (!gloss) { st.blank++; continue; }
     const cur = next.meanings.find(m => m.id === e.slot);
     if (cur && cur.gloss.toLowerCase() === gloss.toLowerCase()) { st.unchanged++; continue; }
     let slot = next.meanings.find(m => m.gloss.toLowerCase() === gloss.toLowerCase());
     if (!slot) {
-      const pos = byLabel[f[2].toLowerCase()] || (cur && cur.pos) || Object.keys(next.partsOfSpeech)[0] || "";
+      const pos = byLabel[posTxt.toLowerCase()] || (cur && cur.pos) || Object.keys(next.partsOfSpeech)[0] || "";
       slot = { id: slotId(n++), gloss, pos, rank: next.meanings.length + 1 }; next.meanings.push(slot); st.created++;
     }
     for (const o of next.lexicon) if (isObj(o) && o !== e && o.status !== "vetoed" && o.slot === slot.id) { o.slot = null; st.displaced.push(o.id); }
@@ -1668,7 +1784,7 @@ function nextWordId(lang) {
 }
 
 /* Expose the core for tests (Node). */
-if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateLexicon, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs };
+if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateLexicon, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
 
 /* ============================================================
    Interface
@@ -1699,7 +1815,7 @@ if (typeof document !== "undefined") (function () {
       startupNote = { err: true, text: `The autosaved language could not be read (${r.errors[0]}). A copy was kept in browser storage as "${key}", and a blank language was started.` };
       return skeleton();
     }
-    if (r.warnings.length) startupNote = { err: false, text: `Autosave loaded with ${r.warnings.length} note(s). Open Menu → File check for details.` };
+    if (r.warnings.length) startupNote = { err: false, text: `Autosave loaded with ${r.warnings.length} note(s). Open Menu → Diagnostics for details.` };
     return r.data;
   }
   lang = loadAutosave();
@@ -1714,12 +1830,18 @@ if (typeof document !== "undefined") (function () {
     if (storeSet(STORE_KEY, serialize(lang))) setSaveState("Saved");
     else setSaveState("Autosave failed", true);
   }
-  function changed() {
+  // Veto undo snapshots hold the lexicon and learned values. Any edit outside the veto screen makes them stale
+  // (restoring one would overwrite that edit), so they are dropped. keepVetoUndo: the edit can't conflict with them.
+  let vetoUndo = []; // snapshots of { lexicon, comfort, idx } before each veto-screen action (this session only)
+  function changed(keepVetoUndo) {
+    if (!keepVetoUndo) vetoUndo = [];
     if (!meta.dirtySince) { meta.dirtySince = Date.now(); saveMeta(); }
     setSaveState("Saving…");
     clearTimeout(saveTimer);
     saveTimer = setTimeout(autosaveNow, 250);
   }
+  // A different language was loaded (Upload, New language): drop everything that belonged to the old one this session.
+  function resetSession() { vetoUndo = []; ui.vetoNote = ""; ui.vetoIdx = 0; ui.genNotes = null; batch = null; openMeaningSheet.pending = null; }
   window.addEventListener("pagehide", () => { if (saveTimer) autosaveNow(); });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && saveTimer) autosaveNow(); });
 
@@ -1833,17 +1955,29 @@ if (typeof document !== "undefined") (function () {
     return `<div class="inv">${row("consonants", "Consonants")}${row("vowels", "Vowels")}<div class="tip">Tap a sound here to edit its label, example word or how common it is.</div></div>`;
   }
   /* ---- stages ---- */
-  const STAGES = [
-    { id: "sounds", name: "Sounds", built: true },
-    { id: "spelling", name: "Spelling", built: true },
-    { id: "syllables", name: "Syllable rules", built: true },
-    { id: "samples", name: "Sample words", built: true },
-    { id: "proto", name: "Sound changes", built: true },
-    { id: "shapes", name: "Shape rules", built: true },
-    { id: "generate", name: "Generate and assign meanings", built: true },
-    { id: "veto", name: "Veto", built: true },
-    { id: "grammar", name: "Grammar" }
-  ];
+  // Two paths (decision 19). Proto: Sounds → Syllables → Sound changes → Spelling → Samples → …; Modern: no sound-change stage.
+  function stagesFor(L) {
+    const proto = L.proto.enabled === true;
+    const tail = [
+      { id: "shapes", name: "Shape rules", built: true },
+      { id: "generate", name: "Generate and assign meanings", built: true },
+      { id: "veto", name: "Veto", built: true },
+      { id: "grammar", name: "Grammar" }
+    ];
+    return proto ? [
+      { id: "sounds", name: "Proto sounds", built: true },
+      { id: "syllables", name: "Proto syllable rules", built: true },
+      { id: "proto", name: "Sound changes", built: true },
+      { id: "spelling", name: "Spelling", built: true },
+      { id: "samples", name: "Sample words", built: true }
+    ].concat(tail) : [
+      { id: "sounds", name: "Sounds", built: true },
+      { id: "spelling", name: "Spelling", built: true },
+      { id: "syllables", name: "Syllable rules", built: true },
+      { id: "samples", name: "Sample words", built: true }
+    ].concat(tail);
+  }
+  let STAGES = [];
   function stageIndex() { const i = STAGES.findIndex(st => st.id === ui.stage && st.built); return i < 0 ? 0 : i; }
   function stageHead(i, intro) {
     return `<section class="stagehead"><button class="stagebtn" data-act="stages">Stage ${i + 1} of ${STAGES.length} ▾</button><h1>${esc(STAGES[i].name)}</h1><p>${intro}</p></section>`;
@@ -1865,6 +1999,27 @@ if (typeof document !== "undefined") (function () {
       if (ev.target.closest("[data-x]")) return closeSheet();
       const b = ev.target.closest("[data-s]"); if (!b || b.disabled) return;
       closeSheet(); goStage(b.dataset.s);
+    });
+  }
+
+  function renderPath() {
+    return `<section class="stagehead"><div class="step">Before you start</div><h1>How does your language begin?</h1>
+        <p>This decides which stages you'll use. You can change it later from the menu.</p></section>
+      <button class="pathcard" data-act="path" data-path="proto"><b>Develop from proto roots</b>
+        <span class="blk">You pick the sounds and syllable rules of an older language. Sound changes then turn its words into the modern language, which gives natural-looking irregularity.</span>
+        <span class="blk muted small">Proto sounds → Proto syllable rules → Sound changes → Spelling → Sample words → …</span></button>
+      <button class="pathcard" data-act="path" data-path="modern"><b>Start modern</b>
+        <span class="blk">The sounds and syllable rules you pick are the language as it's spoken today. No sound-change stage.</span>
+        <span class="blk muted small">Sounds → Spelling → Syllable rules → Sample words → …</span></button>`;
+  }
+  function openChangePath() {
+    const P = lang.proto, toModern = P.enabled === true, n = P.eras.reduce((k, e) => k + (isObj(e) && Array.isArray(e.changes) ? e.changes.length : 0), 0);
+    openSheet(`<h2>Change path</h2>
+      <p style="margin:0 0 8px">You're on the <b>${P.enabled === true ? "proto" : "modern"}</b> path.</p>
+      <p class="muted small" style="margin:0">${toModern ? `Switching to modern: your sounds and syllable rules become the modern language. Your ${n} sound-change rule${n === 1 ? " is" : "s are"} kept but no longer used.` : "Switching to proto: your sounds and syllable rules become the older proto-language, and a Sound changes stage appears where you write the changes that turn it into the modern language."}</p>
+      <div class="actions"><button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="go">Switch to ${toModern ? "modern" : "proto"}</button></div>`, ev => {
+      const x = ev.target.closest("[data-x]"); if (!x) return; closeSheet();
+      if (x.dataset.x === "go") commitWithLockCheck(L => { L.proto.enabled = !toModern; });
     });
   }
 
@@ -1919,26 +2074,88 @@ if (typeof document !== "undefined") (function () {
     const cl = lang.syllables.classes, inv = inventory();
     const keys = Object.keys(cl).sort((a, b) => (a === "C" ? -2 : a === "V" ? -1 : 0) - (b === "C" ? -2 : b === "V" ? -1 : 0) || a.localeCompare(b));
     let h = keys.map(L => {
-      const c = cl[L], linked = c.auto === true && (L === "C" || L === "V");
-      const desc = linked ? `All your ${L === "C" ? "consonants" : "vowels"} · follows your sounds` : `${c.members.length} sound${c.members.length === 1 ? "" : "s"}`;
+      const c = cl[L], g = c.follows && GROUP_BY_ID[c.follows];
+      const desc = `${c.note ? esc(c.note) + " · " : ""}${g ? `<span class="linked">follows your ${esc(g.name.toLowerCase())}</span>` : `${c.members.length} sound${c.members.length === 1 ? "" : "s"}`}`;
       const mem = c.members.length ? c.members.map(m => m in inv ? esc(m) : everSounds().has(m) ? `<span class="newm" title="Made by a sound change">${esc(m)}</span>` : `<s class="gone" title="Not in your sounds or made by any sound change">${esc(m)}</s>`).join(" ") : '<span class="muted small">no sounds yet</span>';
       return `<button class="rowcard" data-act="class" data-cls="${esc(L)}"><span class="clsL">${esc(L)}</span><span class="grow"><span class="blk muted small">${desc}</span><span class="blk members">${mem}</span></span><span class="muted">✎</span></button>`;
     }).join("");
-    const restore = ["C", "V"].filter(L => !(L in cl));
-    h += `<div class="toolbar"><button class="btn" data-act="addclass">+ Add class</button>${restore.map(L => `<button class="btn" data-act="restore" data-cls="${L}">Restore ${L} (all ${L === "C" ? "consonants" : "vowels"})</button>`).join("")}</div>`;
-    return h;
+    h += `<div class="toolbar"><button class="btn" data-act="addclass">+ Add your own class</button></div>`;
+    return h + commonClassesHTML();
   }
+  // Common classes panel (findings 1a, 4): every group with at least one of your sounds, and its status.
+  function commonClassesHTML() {
+    const cl = lang.syllables.classes, declined = lang.syllables.declined || [];
+    const rows = CLASS_GROUPS.map(g => {
+      const mem = groupMembers(lang, g.id);
+      if (!mem.length) return "";
+      const owner = Object.entries(cl).find(([, c]) => isObj(c) && c.follows === g.id);
+      const memTxt = mem.map(m => g.id === "liquid" && RLIKE.test(m) && CAT.has(m) && CAT.get(m).manner === "fricative" ? `${esc(m)} <span class="muted small">(r-like)</span>` : esc(m)).join(" ");
+      let status;
+      if (owner) status = `<span class="okmark">✓ class ${esc(owner[0])}</span>`;
+      else if (declined.includes(g.id)) status = `<button class="btn small" data-act="ccadd" data-g="${g.id}">Add back</button>`;
+      else if (g.letter in cl) status = `<button class="btn small" data-act="ccadd" data-g="${g.id}">Add under another letter</button><span class="blk muted small">${g.letter} is your own class</span>`;
+      else status = `<button class="btn small" data-act="ccadd" data-g="${g.id}">Add</button>`;
+      return `<div class="ccrow"><span class="clsL">${g.letter}</span><span class="grow"><b>${esc(g.name)}</b> <span class="muted small">${esc(g.note)}</span><span class="blk members">${memTxt}</span></span><span class="ccst">${status}</span></div>`;
+    }).join("");
+    return rows ? `<details class="cc"${ui.ccOpen ? " open" : ""}><summary>Common classes for your sounds</summary><p class="muted small" style="margin:4px 0 6px">The usual class letters and which of your sounds fit. They're created for you and follow your sounds; edit or delete any of them.</p>${rows}</details>` : "";
+  }
+  function addGroupClass(gid, letter) {
+    const g = GROUP_BY_ID[gid];
+    commitWithLockCheck(n => {
+      const sy = n.syllables;
+      sy.declined = (sy.declined || []).filter(x => x !== gid);
+      sy.classes[letter] = { members: groupMembers(n, gid), follows: gid, note: g.note };
+    }, () => toast(`Added ${g.name} as ${letter}`));
+  }
+  function ccAdd(gid) {
+    const g = GROUP_BY_ID[gid], cl = lang.syllables.classes;
+    if (!(g.letter in cl)) return addGroupClass(gid, g.letter);
+    openSheet(`<h2>Add ${esc(g.name)}</h2><p class="muted small" style="margin:0">${g.letter} is already one of your own classes. Pick another letter.</p>
+      <label class="field"><span>Letter</span><input type="text" id="ccL" maxlength="1" class="ipa" autocapitalize="characters" autocomplete="off"></label><p class="err-text" id="ccErr"></p>
+      <div class="actions"><button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="go">Add</button></div>`, ev => {
+      const x = ev.target.closest("[data-x]"); if (!x) return;
+      if (x.dataset.x === "cancel") return closeSheet();
+      const L = $("ccL").value.trim().toUpperCase();
+      if (!CLASS_RE.test(L)) { $("ccErr").textContent = "Pick one capital letter, A to Z."; return; }
+      if (L in cl) { $("ccErr").textContent = `There's already a class ${L}.`; return; }
+      closeSheet(); addGroupClass(gid, L);
+    });
+  }
+  // What share each shape really gets in a position (finding 7): pattern by weight, shapes evenly, times learned; unusable shapes dropped.
+  function positionShares(pos) {
+    const sh = lang.syllables.shapes, list = sh[pos].length ? sh[pos] : sh.any;
+    const m = shapeWeights(list); let total = 0;
+    for (const [k, w] of [...m]) { if (!k.split("").every(L => classSize(L) > 0)) { m.delete(k); continue; } const v = w * Math.max(0.05, 1 + learnedOf(lang, k)); m.set(k, v); total += v; }
+    return total ? [...m].map(([k, v]) => [k, v / total]).sort((a, b) => b[1] - a[1]) : [];
+  }
+  function sharesHTML(pos) {
+    const sh = positionShares(pos); if (!sh.length) return "";
+    const pct = x => x >= 0.995 ? "100%" : x < 0.01 ? "<1%" : Math.round(x * 100) + "%";
+    return `<p class="shares"><span class="muted small">Real share per syllable:</span> ${sh.slice(0, 10).map(([k, v]) => `<span class="shapechip"><b>${k}</b> ${pct(v)}</span>`).join(" ")}${sh.length > 10 ? ` <span class="muted small">+${sh.length - 10} more</span>` : ""}</p>`;
+  }
+  const PATTERN_GUIDE = [
+    ["CV", "every syllable is consonant + vowel: ma.ka.ni"],
+    ["(C)V", "vowel-only syllables allowed too: a.ma.u"],
+    ["CV(C)", "a syllable may end in any consonant: kat.ma"],
+    ["(C)V(N)", "may end in a nasal only (Japanese-like): kan.ta"],
+    ["(C)V(C)", "optional consonant at both ends: an.tak"],
+    ["C(L)V(C)", "clusters like pl, tr at the start: plat.ka (uses L)"]
+  ];
   function patternsHTML() {
     const sh = lang.syllables.shapes;
     const showPos = ui.showPositions || ["initial", "medial", "final"].some(p => sh[p].length);
     let h = "";
+    const usesAny = ["initial", "medial", "final"].filter(p => !sh[p].length), pname = { initial: "first", medial: "middle", final: "last" };
     for (const [pos, name] of POS) {
       if (pos !== "any" && !showPos) continue;
       h += `<h3>${name}</h3>`;
+      if (pos === "any" && showPos) h += `<p class="ghint">${usesAny.length ? `Used for the ${usesAny.map(p => pname[p]).join(", ").replace(/, ([^,]*)$/, " and $1")} syllable${usesAny.length > 1 ? "s" : ""}.` : "Not used: every position has its own list."}</p>`;
       if (pos !== "any" && !sh[pos].length) h += `<p class="ghint">Empty, so it uses Any position.</p>`;
+      if (pos !== "any" && sh[pos].length) h += `<p class="ghint">These <b>replace</b> Any position for the ${pname[pos]} syllable${pos === "medial" ? "s" : ""}.</p>`;
       if (pos === "any" && !sh.any.length) h += `<p class="ghint">No patterns yet.</p>`;
       h += sh[pos].map((e, idx) => `<button class="rowcard" data-act="pattern" data-pos="${pos}" data-idx="${idx}"><span class="grow"><span class="patsrc">${esc(e.pattern)}</span>${patternInfoHTML(e.pattern)}</span><span class="wt">how common ${fmtW(e.weight)}</span></button>`).join("");
-      h += `<div class="toolbar"><button class="btn" data-act="addpattern" data-pos="${pos}">+ Add pattern</button></div>`;
+      if (pos === "any" ? (!showPos || usesAny.length) : true) h += sharesHTML(pos === "any" ? (usesAny[0] || "initial") : pos);
+      h += `<div class="toolbar"><button class="btn" data-act="addpattern" data-pos="${pos}">+ Add pattern</button>${pos !== "any" && sh.any.length ? `<button class="btn" data-act="copyany" data-pos="${pos}">Copy the Any patterns here</button>` : ""}</div>`;
     }
     if (!showPos) h += `<p><button class="linkbtn" data-act="showpos">Set different patterns for the first, middle or last syllable</button></p>`;
     else if (!["initial", "medial", "final"].some(p => sh[p].length)) h += `<p><button class="linkbtn" data-act="hidepos">Hide position rules</button></p>`;
@@ -1956,11 +2173,12 @@ if (typeof document !== "undefined") (function () {
   }
   function renderSyllables(i) {
     const none = !Object.keys(lang.sounds.consonants).length && !Object.keys(lang.sounds.vowels).length;
-    return `${stageHead(i, "Say which syllable shapes your words can use. Nothing is filled in for you.")}
+    return `${stageHead(i, lang.proto.enabled === true ? "Say which syllable shapes the proto-language's roots can use. Sound changes turn them into modern words later." : "Say which syllable shapes your words can use. Nothing is filled in for you.")}
       ${none ? '<div class="warnline">You haven\'t picked any sounds yet, so every count below is 0.</div>' : ""}
-      <h2>Sound classes</h2><p class="ghint">Named groups of sounds that patterns use. C and V follow your sounds automatically.</p>
+      <h2>Sound classes</h2><p class="ghint">Named groups of sounds that patterns use. The usual ones (C, V, N, L…) are made for you from your sounds and follow them.</p>
       ${classesHTML()}
-      <h2>Syllable patterns</h2><p class="ghint">Capital letters are classes and ( ) marks an optional part. For example, (C)V(N) allows V, CV, VN and CVN. The number on each shape is how many syllables it can make.</p>
+      <h2>Syllable patterns</h2><p class="ghint">Capital letters are classes and ( ) marks an optional part. For example, (C)V(N) allows V, CV, VN and CVN. The number on each shape is how many syllables it can make, before shape rules (which may remove some).</p>
+      <details class="cc"><summary>Common patterns to start from</summary>${PATTERN_GUIDE.map(([pt, d]) => `<button class="guiderow" data-act="patex" data-p="${esc(pt)}"><code>${esc(pt)}</code> <span class="muted small">${esc(d)}</span></button>`).join("")}<p class="muted small" style="margin:4px 0 0">Tap one to start a new pattern from it. Examples only, nothing is added until you save.</p></details>
       ${patternsHTML()}
       <h2>Root length</h2><p class="ghint">How many syllables a root can have.</p>
       ${rootLengthHTML()}
@@ -1969,37 +2187,37 @@ if (typeof document !== "undefined") (function () {
 
   function openClass(L) {
     const cl = lang.syllables.classes, isNew = !L;
-    const orig = isNew ? { members: [], auto: false } : cl[L];
-    const canLink = L === "C" || L === "V";
-    const draft = { members: orig.members.slice(), auto: canLink && orig.auto === true };
+    const orig = isNew ? { members: [], follows: null, note: "" } : cl[L];
+    const draft = { members: orig.members.slice(), follows: orig.follows && GROUP_BY_ID[orig.follows] ? orig.follows : null };
     let deleteArmed = false;
-    const inv = inventory();
-    const ever = everSounds();
+    const inv = inventory(), ever = everSounds();
     const chips = list => list.map(m => `<button class="chip${draft.members.includes(m) ? " on" : ""}${m in inv ? "" : ever.has(m) ? " new" : " missing"}" data-m="${esc(m)}">${esc(m)}</button>`).join("");
     function membersHTML() {
       const cons = sortSyms(Object.keys(lang.sounds.consonants)), vows = sortSyms(Object.keys(lang.sounds.vowels));
       const made = sortSyms([...ever].filter(m => !(m in inv)));
       const gone = draft.members.filter(m => !(m in inv) && !ever.has(m));
-      const note = canLink ? (draft.auto ? `Follows all your ${L === "C" ? "consonants" : "vowels"}. Changing its sounds stops that.` : `Doesn't follow your sounds. Tap "Follow my sounds" to link it again.`) : "Tap sounds to put them in this class.";
+      const note = draft.follows ? `Follows your ${GROUP_BY_ID[draft.follows].name.toLowerCase()}: it updates when your sounds change. Tapping a sound below makes it a fixed list instead.` : "A fixed list: tap sounds to put them in or take them out.";
       return `<p class="muted small" style="margin:6px 0">${note}</p>
         <div class="inv"><div class="row"><b>Consonants</b>${cons.length ? chips(cons) : '<span class="none">none picked</span>'}</div>
         <div class="row"><b>Vowels</b>${vows.length ? chips(vows) : '<span class="none">none picked</span>'}</div>
         ${made.length ? `<div class="row"><b>From sound changes</b>${chips(made)}</div>` : ""}
         ${gone.length ? `<div class="row"><b>Other</b>${chips(gone)}</div>` : ""}</div>
         <div class="addany"><input type="text" id="cAny" class="ipa" placeholder="Any other sound" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" data-q="addany">Add</button></div>
-        <div class="toolbar"><button class="btn" data-q="cons">All consonants</button><button class="btn" data-q="vows">All vowels</button><button class="btn" data-q="none">Clear</button>${canLink && !draft.auto ? `<button class="btn" data-q="link">Follow my sounds</button>` : ""}</div>`;
+        <div class="toolbar"><button class="btn" data-q="cons">All consonants</button><button class="btn" data-q="vows">All vowels</button><button class="btn" data-q="none">Clear</button></div>`;
     }
     openSheet(`<h2>${isNew ? "New class" : `Class <span class="clsL">${esc(L)}</span>`}</h2>
       ${isNew ? `<label class="field"><span>Letter (one capital letter, used in patterns)</span><input type="text" id="cLetter" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" class="ipa"></label>` : ""}
+      <label class="field"><span>Description</span><input type="text" id="cNote" value="${esc(orig.note || "")}" placeholder="What this class is, or what it's for"></label>
+      <label class="field"><span>Follow a group of your sounds</span><select id="cFollow"><option value="">Off (a fixed list)</option>${CLASS_GROUPS.map(g => `<option value="${g.id}"${draft.follows === g.id ? " selected" : ""}>${esc(g.name)}</option>`).join("")}</select></label>
       <div id="cMembers">${membersHTML()}</div>
       <p class="err-text" id="cErr"></p>
       <div class="actions">${isNew ? "" : '<button class="btn danger left" data-x="delete">Delete class</button>'}<button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="save">Save</button></div>`, ev => {
-      const redraw = () => { $("cMembers").innerHTML = membersHTML(); };
+      const redraw = () => { $("cMembers").innerHTML = membersHTML(); $("cFollow").value = draft.follows || ""; };
       const m = ev.target.closest("[data-m]");
       if (m) {
         const sym = m.dataset.m, k = draft.members.indexOf(sym);
         if (k >= 0) draft.members.splice(k, 1); else draft.members.push(sym);
-        draft.auto = false; return redraw();
+        draft.follows = null; return redraw();
       }
       const q = ev.target.closest("[data-q]");
       if (q) {
@@ -2007,15 +2225,13 @@ if (typeof document !== "undefined") (function () {
         if (kind === "addany") {
           const v = normSym($("cAny").value);
           if (!v || /\s/.test(v)) { $("cErr").textContent = "Type one sound (no spaces)."; return; }
+          if (badSymbolChar(v)) { $("cErr").textContent = /[A-Z]/.test(badSymbolChar(v)) ? "Capital letters A–Z are class names, not sounds." : `A sound can't contain "${badSymbolChar(v)}".`; return; }
           if (!draft.members.includes(v)) draft.members.push(v);
-          draft.auto = false; $("cErr").textContent = ""; return redraw();
+          draft.follows = null; $("cErr").textContent = ""; return redraw();
         }
-        if (kind === "link") { draft.auto = true; draft.members = sortSyms(Object.keys(lang.sounds[L === "C" ? "consonants" : "vowels"])); }
-        else {
-          draft.auto = false;
-          if (kind === "none") draft.members = [];
-          else for (const sym of Object.keys(lang.sounds[kind === "cons" ? "consonants" : "vowels"])) if (!draft.members.includes(sym)) draft.members.push(sym);
-        }
+        draft.follows = null;
+        if (kind === "none") draft.members = [];
+        else for (const sym of Object.keys(lang.sounds[kind === "cons" ? "consonants" : "vowels"])) if (!draft.members.includes(sym)) draft.members.push(sym);
         return redraw();
       }
       const x = ev.target.closest("[data-x]"); if (!x) return;
@@ -2023,7 +2239,12 @@ if (typeof document !== "undefined") (function () {
       if (x.dataset.x === "delete") {
         const uses = patternsUsing(L);
         if (uses.length && !deleteArmed) { deleteArmed = true; $("cErr").textContent = `Used by: ${uses.join(", ")}. Those patterns will show a missing class. Tap Delete again to delete anyway.`; return; }
-        delete cl[L]; changed(); closeSheet(); render(); toast(`Deleted class ${L}`); return;
+        closeSheet();
+        commitWithLockCheck(n => {
+          if (orig.follows && GROUP_BY_ID[orig.follows]) { const d = n.syllables.declined || (n.syllables.declined = []); if (!d.includes(orig.follows)) d.push(orig.follows); }
+          delete n.syllables.classes[L];
+        }, () => toast(`Deleted class ${L}${orig.follows ? ". It won't come back by itself; Common classes can add it back." : ""}`));
+        return;
       }
       let letter = L;
       if (isNew) {
@@ -2031,15 +2252,20 @@ if (typeof document !== "undefined") (function () {
         if (!CLASS_RE.test(letter)) { $("cErr").textContent = "Pick one capital letter, A to Z."; return; }
         if (letter in cl) { $("cErr").textContent = `There's already a class ${letter}.`; return; }
       }
-      cl[letter] = { members: sortSyms(draft.members), auto: draft.auto };
-      changed(); closeSheet(); render();
+      const note = $("cNote").value.trim();
+      closeSheet();
+      commitWithLockCheck(n => {
+        if (draft.follows) n.syllables.declined = (n.syllables.declined || []).filter(g => g !== draft.follows);
+        n.syllables.classes[letter] = { members: draft.follows ? groupMembers(n, draft.follows) : sortSyms(draft.members), follows: draft.follows, note };
+      });
     });
+    $("cFollow").addEventListener("change", e => { draft.follows = e.target.value || null; if (draft.follows) draft.members = groupMembers(lang, draft.follows); $("cMembers").innerHTML = membersHTML(); });
     if (isNew) { $("cLetter").addEventListener("input", e => { e.target.value = e.target.value.toUpperCase(); }); setTimeout(() => { const el = $("cLetter"); if (el) el.focus(); }, 50); }
   }
 
-  function openPattern(pos, idx) {
+  function openPattern(pos, idx, prefill) {
     const isNew = idx == null, lists = lang.syllables.shapes;
-    const e = isNew ? { pattern: "", weight: 1 } : lists[pos][idx];
+    const e = isNew ? { pattern: prefill || "", weight: 1 } : lists[pos][idx];
     openSheet(`<h2>${isNew ? "New pattern" : "Edit pattern"}</h2>
       <label class="field"><span>Where it applies</span><select id="pPos">${POS.map(([p, n]) => `<option value="${p}"${p === pos ? " selected" : ""}>${n}</option>`).join("")}</select></label>
       <label class="field"><span>Pattern</span><input type="text" id="pSrc" class="mono" value="${esc(e.pattern)}" placeholder="(C)V(N)" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
@@ -2099,15 +2325,18 @@ if (typeof document !== "undefined") (function () {
     return `<span class="blk muted small ipa">${esc(txt)}.</span>${fresh.length ? `<span class="blk warn-text">Makes a sound that's not in your proto sounds: <span class="ipa">${esc([...new Set(fresh)].join(" "))}</span></span>` : ""}${absent.length ? `<span class="blk warn-text">Your words never have <span class="ipa">${esc(absent.join(" "))}</span> here, so this rule does nothing yet.</span>` : ""}`;
   }
   // Apply an edit to a copy; if any locked word's modern form would change, list them and ask first.
-  function commitWithLockCheck(mutate) {
+  // Used for every edit that can change modern forms: sound changes, the path, sounds and classes.
+  // after(): runs once the edit is applied (not if it's cancelled).
+  function commitWithLockCheck(mutate, after) {
     const next = clone(lang); mutate(next);
+    syncClasses(next); // linked classes follow the edited sounds before the words are re-derived
     const hits = [];
     for (const w of next.lexicon) if (isObj(w) && w.status === "locked") { const sNew = deriveSurface(next, w.proto); if (sNew !== w.surface) hits.push([w, sNew]); }
-    const apply = () => { lang = next; refreshSurfaces(lang); changed(); render(); };
+    const apply = () => { lang = next; refreshSurfaces(lang); changed(); render(); if (after) after(); };
     if (!hits.length) return apply();
     openSheet(`<h2>This changes ${hits.length} locked word${hits.length === 1 ? "" : "s"}</h2>
-      <ul class="list ipa">${hits.map(([w, sNew]) => `<li>${esc(w.id)}: /${esc(w.surface)}/ → /${esc(sNew)}/</li>`).join("")}</ul>
-      <p style="margin:8px 0 0">Locked words follow sound-change edits, but only after you agree.</p>
+      <ul class="list ipa">${hits.map(([w, sNew]) => `<li>${esc(spellProto(lang, w.proto))} (${esc(w.id)}): /${esc(w.surface)}/ → /${esc(sNew)}/</li>`).join("")}</ul>
+      <p style="margin:8px 0 0">Locked words only change after you agree.</p>
       <div class="actions"><button class="btn" data-x="cancel">Cancel the edit</button><button class="btn primary" data-x="apply">Apply</button></div>`, ev => {
       const x = ev.target.closest("[data-x]"); if (!x) return;
       closeSheet(); if (x.dataset.x === "apply") apply();
@@ -2124,9 +2353,11 @@ if (typeof document !== "undefined") (function () {
   function traceHTML(proto) {
     const ev = evolve(lang, proto);
     let h = `<p style="margin:0 0 6px"><span class="ipa">/${esc(proto)}/</span> <span class="muted small">proto</span></p>`;
-    if (!lang.proto.enabled) h += `<p class="muted small">Sound changes are switched off.</p>`;
+    // Find each step's era by id in the current language (never by object identity).
+    const eraOf = e => { const k = lang.proto.eras.findIndex(x => isObj(x) && x.id === e.id); return eraLabel(k >= 0 ? lang.proto.eras[k] : e, k); };
+    if (!lang.proto.enabled) h += `<p class="muted small">This language is on the modern path, so it has no sound changes.</p>`;
     else if (!ev.trace.length) h += `<p class="muted small">No rule touches this word.</p>`;
-    else h += `<ol class="trace">${ev.trace.map(t => `<li><span class="muted small">${esc(eraLabel(t.era, lang.proto.eras.indexOf(t.era)))} · </span><code>${esc(t.rule)}</code><br>${t.skipped ? `<span class="muted small">skipped (patchy rule)</span>` : `<span class="ipa">${esc(t.before)} → <b>${esc(t.after)}</b></span>`}</li>`).join("")}</ol>`;
+    else h += `<ol class="trace">${ev.trace.map(t => `<li><span class="muted small">${esc(eraOf(t.era))} · </span><code>${esc(t.rule)}</code><br>${t.skipped ? `<span class="muted small">skipped (patchy rule)</span>` : `<span class="ipa">${esc(t.before)} → <b>${esc(t.after)}</b></span>`}</li>`).join("")}</ol>`;
     h += `<p style="margin:8px 0 0"><span class="ipa">/${esc(ev.segs.join(""))}/</span> <span class="muted small">modern</span> · <b>${esc(spellProto(lang, proto))}</b></p>`;
     return h;
   }
@@ -2154,8 +2385,7 @@ if (typeof document !== "undefined") (function () {
     const kept = modern.filter(x => protoSet.has(x)), added = modern.filter(x => !protoSet.has(x)), lost = inv.proto.filter(x => !modSet.has(x));
     const tw = testWords();
     return `${head}
-      <label class="switchrow"><input type="checkbox" id="chOn" ${P.enabled ? "checked" : ""}> <span><b>Use sound changes</b><span class="blk muted small">Off: modern words are the proto-words. Your rules are kept.</span></span></label>
-      <div class="${P.enabled ? "" : "dim"}">
+      <div>
         ${eras || `<p class="muted small">No rules yet.</p><div class="toolbar"><button class="btn" data-act="addchange" data-ei="-1">+ Add rule</button></div>`}
         <div class="toolbar"><button class="btn" data-act="addera">+ Add era</button><span class="muted small">Optional named stages (Old → Middle → Modern). Spelling can follow an older era.</span></div>
       </div>
@@ -2270,17 +2500,25 @@ if (typeof document !== "undefined") (function () {
     if (r.error) { ui.genNotes = [r.error]; render(); return; }
     ui.genNotes = r.notes; changed(); render(); toast(`Generated ${r.added} word${r.added === 1 ? "" : "s"}`);
   }
+  // Regenerate on a copy: the old words are only replaced once generation has worked.
+  function doRegenerate() {
+    const next = clone(lang); clearUnlocked(next);
+    const r = generateLexicon(next, (Math.random() * 4294967296) >>> 0);
+    if (r.error) { ui.genNotes = [`${r.error} Nothing was regenerated; your words are unchanged.`]; render(); return; }
+    lang = next; ui.genNotes = r.notes; changed(); render(); toast(`Regenerated ${r.added} word${r.added === 1 ? "" : "s"}`);
+  }
   function openMeaning(id) {
     const isNew = id == null, M = lang.meanings;
     const m = isNew ? { id: null, gloss: "", pos: Object.keys(lang.partsOfSpeech)[0] || "", rank: M.length + 1 } : M.find(x => x.id === id);
     const w = isNew ? null : slotHasWord(lang).get(m.id);
-    const starred = lang.lexicon.filter(x => isObj(x) && x.source === "starred" && !x.slot);
+    // Any live or locked word without a meaning can be attached: starred words, and words that lost their meaning (e.g. to a meaning sheet).
+    const unattached = lang.lexicon.filter(x => isObj(x) && x.status !== "vetoed" && !x.slot);
     openSheet(`<h2>${isNew ? "New meaning" : esc(m.gloss)}</h2>
       <label class="field"><span>Meaning</span><input type="text" id="mG" value="${esc(m.gloss)}"></label>
       <label class="field"><span>Part of speech</span><select id="mP">${Object.entries(lang.partsOfSpeech).map(([k, p]) => `<option value="${esc(k)}"${k === m.pos ? " selected" : ""}>${esc(p.label || k)}</option>`).join("")}${m.pos && !lang.partsOfSpeech[m.pos] ? `<option value="${esc(m.pos)}" selected>${esc(m.pos)} (undefined)</option>` : ""}</select></label>
       <label class="field"><span>Rank (1 = gets the shortest word)</span><input type="number" id="mR" min="1" max="${M.length + (isNew ? 1 : 0)}" value="${m.rank}"></label>
       ${isNew ? "" : `<div class="field"><span>Word</span><p style="margin:2px 0">${wordForSlotHTML(w)}</p>
-        ${!w && starred.length ? `<select id="mS"><option value="">Attach a starred word…</option>${starred.map(x => `<option value="${esc(x.id)}">${esc(spellProto(lang, x.proto))} /${esc(x.surface)}/</option>`).join("")}</select>` : ""}
+        ${!w && unattached.length ? `<select id="mS"><option value="">Attach a word without a meaning…</option>${unattached.map(x => `<option value="${esc(x.id)}">${esc(spellProto(lang, x.proto))} /${esc(x.surface)}/${x.source === "starred" ? " ★" : x.status === "locked" ? " (locked)" : ""}</option>`).join("")}</select>` : ""}
         ${w && w.status === "locked" ? '<button type="button" class="linkbtn" data-x="detach">Detach this word (it stays locked, without a meaning)</button>' : ""}</div>`}
       <p class="err-text" id="mErr"></p>
       <div class="actions">${isNew ? "" : '<button class="btn danger left" data-x="delete">Delete meaning</button>'}<button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="save">Save</button></div>`, ev => {
@@ -2289,11 +2527,14 @@ if (typeof document !== "undefined") (function () {
       if (a === "cancel") return closeSheet();
       if (a === "detach") { w.slot = null; changed(); closeSheet(); render(); return; }
       if (a === "delete") {
-        for (const lw of lang.lexicon) if (isObj(lw) && lw.slot === m.id) lw.slot = null;
-        lang.lexicon = lang.lexicon.filter(lw => !(isObj(lw) && lw.status === "live" && lw.source === "generated" && lw.slot === null));
+        // Only this meaning's words: its generated live word goes; locked and starred words stay, without a meaning.
+        const freed = new Set(lang.lexicon.filter(lw => isObj(lw) && lw.slot === m.id));
+        for (const lw of freed) lw.slot = null;
+        lang.lexicon = lang.lexicon.filter(lw => !(freed.has(lw) && lw.status === "live" && lw.source === "generated"));
         M.splice(M.indexOf(m), 1); renumberMeanings(lang); changed(); closeSheet(); render(); return;
       }
       const g = $("mG").value.trim(); if (!g) { $("mErr").textContent = "Type the meaning."; return; }
+      if (g.includes("|")) { $("mErr").textContent = "A meaning can't contain | (it separates the columns of the meaning sheet)."; return; }
       if (M.some(o => o !== m && o.gloss.toLowerCase() === g.toLowerCase())) { $("mErr").textContent = `"${g}" is already on the list.`; return; }
       const r = Math.max(1, Math.min(M.length + (isNew ? 1 : 0), Math.round(Number($("mR").value) || m.rank)));
       if (isNew) { m.id = slotId(nextSlotNum(lang)); M.push(m); }
@@ -2388,7 +2629,6 @@ if (typeof document !== "undefined") (function () {
 
   /* ---- veto screen ---- */
   const vetoSeed = (Math.random() * 4294967296) >>> 0;
-  let vetoUndo = []; // snapshots of { lexicon, comfort } before each action (this session only)
   function vetoOrder(showAll) {
     const words = slotHasWord(lang), ranked = lang.meanings.slice().sort((a, b) => a.rank - b.rank);
     const eligible = ranked.filter(m => { const w = words.get(m.id); return w && (showAll || (w.status === "live" && !w.reviewed)); });
@@ -2401,7 +2641,8 @@ if (typeof document !== "undefined") (function () {
     const order = vetoOrder(!!ui.vetoAll);
     if (!order.length) return { order, m: null };
     if (!ui.vetoAll) return { order, m: order[0] };
-    const k = Math.min(ui.vetoIdx || 0, order.length - 1);
+    const k = Math.max(0, ui.vetoIdx || 0);
+    if (k >= order.length) return { order, m: null, k, done: true }; // went past the last card: the deck is finished
     return { order, m: order[k], k };
   }
   function renderVeto(i) {
@@ -2412,8 +2653,11 @@ if (typeof document !== "undefined") (function () {
     const { order, m, k } = currentCard();
     let h = `${head}<div class="toolbar"><span class="muted small">${reviewed} of ${all.length} reviewed</span><span class="spacer"></span>
       <label class="tick" style="margin:0"><input type="checkbox" id="vAll" ${ui.vetoAll ? "checked" : ""}> Include reviewed</label></div>`;
+    const undoBtn = `<button class="btn" data-act="vundo" ${vetoUndo.length ? "" : "disabled"}>↶ Undo</button>`;
     if (!m) {
-      h += `<div class="okline">Every word has been reviewed. Tick "Include reviewed" to go through them again.</div>`;
+      h += ui.vetoAll
+        ? `<div class="okline">You've been through all ${order.length} words.</div><div class="toolbar" style="justify-content:center;margin-top:8px"><button class="btn primary" data-act="vrestart">Start again from the top</button>${undoBtn}</div>`
+        : `<div class="okline">Every word has been reviewed. Tick "Include reviewed" to go through them again.</div><div class="toolbar" style="justify-content:center;margin-top:8px">${undoBtn}</div>`;
     } else {
       const w = words.get(m.id), twins = nearTwinsOf(lang, w), slots = new Map(lang.meanings.map(x => [x.id, x]));
       h += `<div class="vcard${w.status === "locked" ? " locked" : ""}">
@@ -2423,7 +2667,7 @@ if (typeof document !== "undefined") (function () {
         ${twins.length ? `<div class="warn-text" style="margin-top:8px">Near-twin of ${twins.slice(0, 4).map(t => `<b>${esc(spellProto(lang, t.proto))}</b> (${esc(slots.get(t.slot) ? slots.get(t.slot).gloss : "no meaning")})`).join(", ")}${twins.length > 4 ? ` and ${twins.length - 4} more` : ""}</div>` : ""}
       </div>
       <div class="calbtns"><button class="btn big danger" data-act="vveto">Veto</button><button class="btn big primary" data-act="vkeep">Keep</button></div>
-      <div class="toolbar" style="justify-content:center"><button class="btn" data-act="vlock">${w.status === "locked" ? "Unlock" : "🔒 Lock"}</button><button class="btn" data-act="vundo" ${vetoUndo.length ? "" : "disabled"}>↶ Undo</button>
+      <div class="toolbar" style="justify-content:center"><button class="btn" data-act="vlock">${w.status === "locked" ? "Unlock" : "🔒 Lock"}</button>${undoBtn}
       ${ui.vetoAll ? `<span class="muted small">${(k || 0) + 1} of ${order.length}</span>` : `<span class="muted small">${order.length} left</span>`}</div>
       ${ui.vetoNote ? `<div class="warnline" style="margin-top:8px">${esc(ui.vetoNote)}</div>` : ""}`;
     }
@@ -2455,14 +2699,14 @@ if (typeof document !== "undefined") (function () {
       w.status = "vetoed";
       const r = replacementFor(lang, m.id, segmentWord(w.surface, envWith(langEnv(lang), [...langEnv(lang).symbols, ...CAT.keys()])).length, (Math.random() * 4294967296) >>> 0);
       if (r.error) ui.vetoNote = `${r.error} "${m.gloss}" has no word for now.`;
-      else lang.lexicon.push({ id: "w" + String(nextWordNum(lang)).padStart(4, "0"), proto: r.w.proto, surface: r.surface, slot: m.id, status: "live", reviewed: false, source: "generated" });
+      else lang.lexicon.push({ id: nextWordId(lang), proto: r.w.proto, surface: r.surface, slot: m.id, status: "live", reviewed: false, source: "generated" });
     }
-    changed(); render();
+    changed(true); render();
   }
   function vetoUndoLast() {
     const s = vetoUndo.pop(); if (!s) return;
     lang.lexicon = s.lexicon; lang.comfort = s.comfort; ui.vetoIdx = s.idx; ui.vetoNote = "";
-    changed(); render(); toast("Undone");
+    changed(true); render(); toast("Undone");
   }
 
   /* ---- meaning sheet + settings (menu) ---- */
@@ -2506,7 +2750,7 @@ if (typeof document !== "undefined") (function () {
         if (st.bad) lines.push(`${st.bad} line${st.bad === 1 ? "" : "s"} not understood, ignored.`);
         $("msRes").innerHTML = `<div class="${st.set ? "okline" : "warnline"}" style="margin-top:8px">${lines.map(esc).join("<br>") || "Nothing to change."}</div>
           ${st.set ? '<div class="toolbar"><button class="btn primary" data-x="apply">Apply these meanings</button></div>' : ""}`;
-        $("msRes").dataset.ready = "1"; openMeaningSheet.pending = next;
+        openMeaningSheet.pending = next;
         return;
       }
       if (a === "apply" && openMeaningSheet.pending) { lang = openMeaningSheet.pending; openMeaningSheet.pending = null; renumberMeanings(lang); changed(); closeSheet(); render(); toast("Meanings updated"); }
@@ -2536,6 +2780,7 @@ if (typeof document !== "undefined") (function () {
     return `<option value=""${sel ? "" : " selected"} disabled>Choose…</option>` + opts.map(([v, n]) => `<option value="${esc(v)}"${v === sel ? " selected" : ""}>${esc(n)}</option>`).join("");
   }
   function checksLabel(c) {
+    if (lang.proto.enabled !== true) return "";
     if (c === "proto") return "checks the proto-form";
     if (c === "modern") return "checks the modern form";
     const k = lang.proto.eras.findIndex(e => isObj(e) && e.id === c);
@@ -2560,7 +2805,7 @@ if (typeof document !== "undefined") (function () {
       return `<button class="rowcard" data-act="shape" data-idx="${k}"><span class="grow">
           <span class="patsrc">${esc(isObj(r) && r.settings ? r.settings.reject || "" : "")}</span>
           ${x && x.pp ? shapeInfo(r.settings.reject) : `<span class="blk err-text">${esc(x ? x.error : "")}</span>`}
-          <span class="blk muted small">${esc(checksLabel(r.checks))} · ${esc(ap)}${r.note ? " · " + esc(r.note) : ""}</span></span>
+          <span class="blk muted small">${[checksLabel(r.checks), ap, r.note].filter(Boolean).map(esc).join(" · ")}</span></span>
           <span class="wt">${st.error || !(x && x.pp) ? "" : `rejects ${pctTxt(st.per[k])}`}</span></button>`;
     }).join("");
     let summary = "";
@@ -2588,7 +2833,7 @@ if (typeof document !== "undefined") (function () {
       ${keypadHTML("sSrc", ["#", "…", "ː"])}
       <p class="muted small" style="margin:0 0 6px">Sounds and class letters in a row. <code>#</code> = start or end of the word; <code>…</code> = anything in between. Examples: <code>#ŋ</code> no word starts with ŋ · <code>V V</code> no two vowels together · <code>F … B</code> a front vowel can't be followed later by a back vowel (with classes F and B).</p>
       <div id="sPrev" style="min-height:24px"></div>
-      <label class="field"><span>Which stage it checks (required)</span><select id="sChecks">${stageOptions(r.checks)}</select></label>
+      ${lang.proto.enabled === true ? `<label class="field"><span>Which stage it checks (required)</span><select id="sChecks">${stageOptions(r.checks)}</select></label>` : `<input type="hidden" id="sChecks" value="modern">`}
       ${posIds.length ? `<div class="field"><span>Applies to (none ticked = all roots)</span>${posIds.map(id => `<label class="tick"><input type="checkbox" data-pos="${esc(id)}"${ap.has(id) ? " checked" : ""}> ${esc(lang.partsOfSpeech[id].label || id)}</label>`).join("")}</div>` : ""}
       <label class="field"><span>Note (optional)</span><input type="text" id="sNote" value="${esc(r.note || "")}"></label>
       <p class="err-text" id="sErr"></p>
@@ -2635,7 +2880,7 @@ if (typeof document !== "undefined") (function () {
     if (r.error) return `<span class="blk err-text">${esc(r.error)}</span>`;
     const t = x => x.t === "#" ? "word edge" : x.t === "class" ? `any ${x.L}` : x.s;
     const where = [r.left.length ? `after ${r.left.map(t).join(" ")}` : "", r.right.length ? `before ${r.right.map(t).join(" ")}` : ""].filter(Boolean).join(", ").replace(/^after word edge$/, "at the start of the word").replace(/^before word edge$/, "at the end of the word").replace("after word edge", "at the word start").replace("before word edge", "at the word end");
-    return `<span class="blk muted small"><span class="ipa">${esc(r.target.map(x => x.s).join(""))}</span> is written <b>${r.repl ? esc(r.repl) : "(nothing)"}</b> ${where ? esc(where) : "everywhere"}.</span>`;
+    return `<span class="blk muted small"><span class="ipa">${esc(r.target.map(x => x.s).join(""))}</span> is ${r.repl ? `written <b>${esc(r.repl)}</b>` : "<b>silent</b> (written as nothing)"} ${where ? esc(where) : "everywhere"}.</span>`;
   }
   function tryHTML() {
     const starred = lang.lexicon.filter(w => isObj(w) && w.source === "starred");
@@ -2660,15 +2905,15 @@ if (typeof document !== "undefined") (function () {
         <span class="updown"><button data-act="spmove" data-idx="${k}" data-d="-1" ${k ? "" : "disabled"} aria-label="Move up">↑</button><button data-act="spmove" data-idx="${k}" data-d="1" ${k < o.rules.length - 1 ? "" : "disabled"} aria-label="Move down">↓</button></span>
       </div>`).join("");
     return `${head}
-      <h2>Spell from</h2>
+      ${lang.proto.enabled === true ? `<h2>Spell from</h2>
       <p class="ghint">Which form of each word the spelling follows. Spelling from an older form keeps old distinctions on paper after the sounds merge (like French o / au / eau). Until sound changes exist, every choice gives the same result.</p>
-      <div class="seg" role="group" aria-label="Spell from">${bases.map(([id, n]) => `<button data-act="basis" data-basis="${esc(id)}" class="${o.basis === id ? "on" : ""}">${esc(n)}</button>`).join("")}</div>
+      <div class="seg" role="group" aria-label="Spell from">${bases.map(([id, n]) => `<button data-act="basis" data-basis="${esc(id)}" class="${o.basis === id ? "on" : ""}">${esc(n)}</button>`).join("")}</div>` : ""}
       <h2>Letters</h2>
       <div id="spFlag">${spellFlagHTML()}</div>
       <div class="sptable">${rows}</div>
       <div class="toolbar"><button class="btn" data-act="spfill">Use the IPA symbol for every unspelled sound</button></div>
       <h2>Context rules</h2>
-      <p class="ghint">Override the plain spelling in certain places, in the same notation as sound changes. <code>k > qu / _e</code> writes k as qu before e. <code>#</code> is the start or end of the word, and class letters (C, V…) work in the context. Top to bottom, first match wins.</p>
+      <p class="ghint">Override the plain spelling in certain places, in the same notation as sound changes. <code>k > qu / _e</code> writes k as qu before e; <code>h > ∅ / _#</code> makes a final h silent. <code>#</code> is the start or end of the word, and class letters (C, V…) work in the context. Top to bottom, first match wins.</p>
       ${rules || '<p class="muted small">No rules yet.</p>'}
       <div class="toolbar"><button class="btn" data-act="addsprule">+ Add rule</button></div>
       <h2>Try it</h2>
@@ -2681,7 +2926,7 @@ if (typeof document !== "undefined") (function () {
     const r = isNew ? { rule: "", note: "" } : list[idx];
     openSheet(`<h2>${isNew ? "New spelling rule" : "Edit spelling rule"}</h2>
       <label class="field"><span>Rule</span><input type="text" id="rSrc" class="mono ipa" value="${esc(r.rule)}" placeholder="k > qu / _e" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-      ${keypadHTML("rSrc", ["_", "#", ">", "/"])}
+      ${keypadHTML("rSrc", ["∅", "_", "#", ">", "/"])}
       <div id="rPrev" style="min-height:24px"></div>
       <label class="field"><span>Note (optional)</span><input type="text" id="rNote" value="${esc(r.note || "")}"></label>
       <p class="err-text" id="rErr"></p>
@@ -2703,7 +2948,7 @@ if (typeof document !== "undefined") (function () {
   /* ---- sample words ---- */
   const SAMPLE_COUNT = 20;
   let batch = null; // { sig, words, notes, error, fix } — throwaway, never saved
-  const rulesSig = () => JSON.stringify([lang.sounds, lang.syllables]);
+  const rulesSig = () => JSON.stringify([lang.sounds, lang.syllables, lang.shapes]); // samples follow sounds, syllable rules and shape rules (not sound changes, so they can be compared)
   function reroll() {
     const r = sampleWords(lang, SAMPLE_COUNT, (Math.random() * 4294967296) >>> 0);
     batch = Object.assign({ sig: rulesSig() }, r);
@@ -2711,7 +2956,7 @@ if (typeof document !== "undefined") (function () {
   function starredEntry(proto) { return lang.lexicon.find(w => isObj(w) && w.source === "starred" && w.proto === proto); }
   function renderSamples(i) {
     if (!batch || batch.sig !== rulesSig()) reroll();
-    const head = stageHead(i, "Words made from your sounds and syllable rules, to judge the feel. Star any you want to keep: they go into the lexicon locked, with no meaning yet. The rest vanish when you reroll.");
+    const head = stageHead(i, "Words made from your sounds and syllable rules (shape rules apply too), to judge the feel. Star any you want to keep: they go into the lexicon locked, with no meaning yet. The rest vanish when you reroll.");
     if (batch.error) return `${head}<div class="warnline">${esc(batch.error)} <button class="linkbtn" data-act="go" data-stage="${batch.fix}">Go to ${batch.fix === "sounds" ? "Sounds" : "Syllable rules"}</button></div>${stageNav(i)}`;
     const starred = lang.lexicon.filter(w => isObj(w) && w.source === "starred");
     for (const w of batch.words) w.surface = deriveSurface(lang, w.proto);
@@ -2755,18 +3000,22 @@ if (typeof document !== "undefined") (function () {
     $("langName").value = lang.language.name;
     syncAutoClasses(lang);
     refreshSurfaces(lang);
+    STAGES = stagesFor(lang);
     const i = stageIndex();
     const id = STAGES[i].id;
+    if (lang.proto.enabled !== true && lang.proto.enabled !== false) { $("main").innerHTML = renderPath(); renderBanner(); return; }
     $("main").innerHTML = id === "veto" ? renderVeto(i) : id === "generate" ? renderGenerate(i) : id === "shapes" ? renderShapes(i) : id === "proto" ? renderChanges(i) : id === "spelling" ? renderSpelling(i) : id === "syllables" ? renderSyllables(i) : id === "samples" ? renderSamples(i) : renderSounds(i);
     renderBanner();
   }
 
   function toggle(kind, sym) {
-    const map = lang.sounds[kind], c = CAT.get(sym);
+    const c = CAT.get(sym);
     if (!c || c.kind !== kind) { openEdit(kind, sym); return; } // custom sounds: edit, never lose by a tap
-    if (map[sym]) delete map[sym];
-    else map[sym] = { label: c.label, example: c.example, audio: null, group: c.group, custom: false, weight: 1 };
-    changed(); render();
+    commitWithLockCheck(n => {
+      const map = n.sounds[kind];
+      if (map[sym]) delete map[sym];
+      else map[sym] = { label: c.label, example: c.example, audio: null, group: c.group, custom: false, weight: 1 };
+    });
   }
 
   function groupOptions(kind, current) {
@@ -2788,6 +3037,7 @@ if (typeof document !== "undefined") (function () {
       <div class="actions">
         <button class="btn danger left" data-x="remove">Remove sound</button>
         ${isBuilt ? '<button class="btn" data-x="reset">Reset text</button>' : ""}
+        ${kind === "vowels" && !/ː$/.test(sym) && !lang.sounds.vowels[sym + "ː"] ? `<button class="btn" data-x="long">Add long version (${esc(sym)}ː)</button>` : ""}
         <button class="btn" data-x="cancel">Cancel</button>
         <button class="btn primary" data-x="save">Save</button>
       </div>`, ev => {
@@ -2795,8 +3045,14 @@ if (typeof document !== "undefined") (function () {
       const act = x.dataset.x;
       if (act === "cancel") return closeSheet();
       if (act === "reset") { $("fLabel").value = c.label; $("fExample").value = c.example; return; }
+      if (act === "long") {
+        const ls = sym + "ː";
+        closeSheet();
+        commitWithLockCheck(n => { n.sounds.vowels[ls] = { label: `long ${e.label || sym}`, example: "", audio: null, group: e.group, custom: true, weight: 1 }; }, () => toast(`Added ${ls}`));
+        return;
+      }
       if (act === "unlearn") { delete lang.comfort.learned[sym]; changed(); closeSheet(); render(); toast(`Learned value for ${sym} reset`); return; }
-      if (act === "remove") { delete lang.sounds[kind][sym]; changed(); closeSheet(); render(); toast(`Removed ${sym}`); return; }
+      if (act === "remove") { closeSheet(); commitWithLockCheck(n => { delete n.sounds[kind][sym]; }, () => toast(`Removed ${sym}`)); return; }
       if (act === "save") {
         e.label = $("fLabel").value.trim();
         e.example = $("fExample").value.trim();
@@ -2816,6 +3072,8 @@ if (typeof document !== "undefined") (function () {
       <h2>Add a sound</h2>
       <p class="muted" style="margin:0;font-size:14px">Any IPA symbol, including ones with marks (like aː, ẽ or tʼ). It joins its group like a built-in tile.</p>
       <label class="field"><span>Symbol</span><input type="text" id="aSym" class="ipa" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      ${keypadHTML("aSym", ["ː", "ʰ", "ʲ", "ʷ"])}
+      <p class="muted small" style="margin:-4px 0 6px">A typed colon becomes ː (long).</p>
       <label class="field"><span>Kind</span><select id="aKind"><option value="consonants">Consonant</option><option value="vowels">Vowel</option></select></label>
       <label class="field"><span>Group</span><select id="aGroup">${groupOptions("consonants")}</select></label>
       <label class="field"><span>Label (plain name)</span><input type="text" id="aLabel"></label>
@@ -2828,29 +3086,32 @@ if (typeof document !== "undefined") (function () {
       const err = t => { $("aErr").textContent = t; };
       if (!sym) return err("Type a symbol first.");
       if (/\s/.test(sym)) return err("A symbol can't contain spaces.");
+      if (badSymbolChar(sym)) return err(/[A-Z]/.test(badSymbolChar(sym)) ? "Capital letters A–Z are class names, so a sound can't use them. IPA uses lowercase and special letters (like ʀ or ɴ)." : `A symbol can't contain "${badSymbolChar(sym)}": rules and patterns use it as notation.`);
       if (lang.sounds.consonants[sym] || lang.sounds.vowels[sym]) return err(`${sym} is already in your language.`);
       if (CAT.has(sym)) {
         const c = CAT.get(sym);
         return err(`${sym} is already a built-in tile (${c.label}) under ${GROUPS[c.kind].find(g => g.id === c.group).name}. Tap that tile instead.`);
       }
-      lang.sounds[kind][sym] = { label: $("aLabel").value.trim(), example: $("aExample").value.trim(), audio: null, group: $("aGroup").value, custom: true, weight: 1 };
-      changed(); closeSheet(); render(); toast(`Added ${sym}`);
+      const entry = { label: $("aLabel").value.trim(), example: $("aExample").value.trim(), audio: null, group: $("aGroup").value, custom: true, weight: 1 };
+      closeSheet();
+      commitWithLockCheck(n => { n.sounds[kind][sym] = entry; }, () => toast(`Added ${sym}`));
     });
     $("aKind").addEventListener("change", ev => { $("aGroup").innerHTML = groupOptions(ev.target.value); });
     setTimeout(() => { const el = $("aSym"); if (el) el.focus(); }, 50);
   }
 
   function applyPreset(p, mode) {
-    if (mode === "replace") { lang.sounds.consonants = {}; lang.sounds.vowels = {}; }
     let added = 0;
-    for (const kind of ["consonants", "vowels"]) for (const sym of p[kind]) {
-      if (lang.sounds[kind][sym]) continue;
-      const c = CAT.get(sym);
-      lang.sounds[kind][sym] = { label: c.label, example: c.example, audio: null, group: c.group, custom: false, weight: 1 };
-      added++;
-    }
-    changed(); closeSheet(); render();
-    toast(mode === "replace" ? `Loaded ${p.name} sounds` : `Added ${added} sound(s) from ${p.name}`);
+    closeSheet();
+    commitWithLockCheck(n => {
+      if (mode === "replace") { n.sounds.consonants = {}; n.sounds.vowels = {}; }
+      for (const kind of ["consonants", "vowels"]) for (const sym of p[kind]) {
+        if (n.sounds[kind][sym]) continue;
+        const c = CAT.get(sym);
+        n.sounds[kind][sym] = { label: c.label, example: c.example, audio: null, group: c.group, custom: false, weight: 1 };
+        added++;
+      }
+    }, () => toast(mode === "replace" ? `Loaded ${p.name} sounds` : `Added ${added} sound(s) from ${p.name}`));
   }
   function openPresets() {
     const hasAny = Object.keys(lang.sounds.consonants).length + Object.keys(lang.sounds.vowels).length > 0;
@@ -2890,7 +3151,14 @@ if (typeof document !== "undefined") (function () {
     else if (act === "go") goStage(a.dataset.stage);
     else if (act === "class") openClass(a.dataset.cls);
     else if (act === "addclass") openClass(null);
-    else if (act === "restore") { lang.syllables.classes[a.dataset.cls] = { members: [], auto: true }; changed(); render(); }
+    else if (act === "path") { lang.proto.enabled = a.dataset.path === "proto"; ui.stage = "sounds"; changed(); render(); window.scrollTo(0, 0); }
+    else if (act === "ccadd") ccAdd(a.dataset.g);
+    else if (act === "patex") openPattern("any", null, a.dataset.p);
+    else if (act === "copyany") {
+      const sh = lang.syllables.shapes, pos = a.dataset.pos; let n = 0;
+      for (const e of sh.any) if (!sh[pos].some(o => o.pattern === e.pattern)) { sh[pos].push({ pattern: e.pattern, weight: e.weight }); n++; }
+      changed(); render(); toast(n ? `Copied ${n} pattern${n === 1 ? "" : "s"}` : "Already all here");
+    }
     else if (act === "pattern") openPattern(a.dataset.pos, Number(a.dataset.idx));
     else if (act === "addpattern") openPattern(a.dataset.pos, null);
     else if (act === "showpos") { ui.showPositions = true; saveUI(); render(); }
@@ -2904,6 +3172,7 @@ if (typeof document !== "undefined") (function () {
     else if (act === "vveto") vetoAct("veto");
     else if (act === "vlock") vetoAct("lock");
     else if (act === "vundo") vetoUndoLast();
+    else if (act === "vrestart") { ui.vetoIdx = 0; ui.vetoNote = ""; saveUI(); render(); window.scrollTo(0, 0); }
     else if (act === "starter") { loadStarterMeanings(lang); changed(); render(); toast("Starter list loaded"); }
     else if (act === "importm") openImport();
     else if (act === "addm") openMeaning(null);
@@ -2918,7 +3187,7 @@ if (typeof document !== "undefined") (function () {
       openSheet(`<h2>Regenerate unlocked words?</h2><p style="margin:0">This replaces ${live.length} unlocked word${live.length === 1 ? "" : "s"}${kept ? `, including ${kept} you marked Keep` : ""}. Locked and vetoed words stay (vetoed forms never come back).</p>
         <div class="actions"><button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="go">Regenerate</button></div>`, ev => {
         const x = ev.target.closest("[data-x]"); if (!x) return; closeSheet();
-        if (x.dataset.x === "go") { clearUnlocked(lang); doGenerate(); }
+        if (x.dataset.x === "go") doRegenerate();
       });
     }
     else if (act === "addshape") openShape(null);
@@ -2964,11 +3233,11 @@ if (typeof document !== "undefined") (function () {
     else if (t.id === "tryIn") { ui.tryWord = t.value; updateSpellLive(); }
     else if (t.id === "chTry") { ui.chTry = t.value; const o = $("chTryOut"); if (o) o.innerHTML = t.value.trim() ? traceHTML(t.value.trim()) : ""; }
   });
+  $("main").addEventListener("toggle", ev => { if (ev.target.classList && ev.target.classList.contains("cc") && ev.target.querySelector(".ccrow")) { ui.ccOpen = ev.target.open; saveUI(); } }, true);
   $("main").addEventListener("change", ev => {
-    if (ev.target.id === "vAll") { ui.vetoAll = ev.target.checked; ui.vetoIdx = 0; ui.vetoNote = ""; saveUI(); render(); return; }
-    if (ev.target.id === "chOn") { const on = ev.target.checked; commitWithLockCheck(n => { n.proto.enabled = on; }); }
+    if (ev.target.id === "vAll") { ui.vetoAll = ev.target.checked; ui.vetoIdx = 0; ui.vetoNote = ""; saveUI(); render(); }
   });
-  $("langName").addEventListener("input", ev => { lang.language.name = ev.target.value; changed(); });
+  $("langName").addEventListener("input", ev => { lang.language.name = ev.target.value; changed(true); });
 
   /* ---- menu ---- */
   function exportFile() {
@@ -3009,7 +3278,7 @@ if (typeof document !== "undefined") (function () {
         const x = ev.target.closest("[data-x]"); if (!x) return;
         if (x.dataset.x === "export") { exportFile(); return; }
         if (x.dataset.x === "cancel") return closeSheet();
-        lang = r.data; meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet(); render(); toast(`Loaded ${next}`);
+        lang = r.data; resetSession(); meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet(); render(); toast(`Loaded ${next}`);
       });
     });
   }
@@ -3057,7 +3326,8 @@ if (typeof document !== "undefined") (function () {
       <dl class="kv"><dt>Format</dt><dd>${FORMAT}, version ${VERSION}</dd>
       <dt>Sounds</dt><dd>${n("consonants")} consonants, ${n("vowels")} vowels</dd>
       <dt>Shape rules</dt><dd>${lang.shapes.length}</dd>
-      <dt>Sound changes</dt><dd>${lang.proto.enabled ? "on" : "off"}, ${lang.proto.eras.length} era(s), ${lang.proto.eras.reduce((n, e) => n + e.changes.length, 0)} rules</dd>
+      <dt>Path</dt><dd>${lang.proto.enabled === true ? "proto (develop from proto roots)" : lang.proto.enabled === false ? "modern" : "not chosen yet"}</dd>
+      <dt>Sound changes</dt><dd>${lang.proto.enabled === true ? "used" : "not used"}, ${lang.proto.eras.length} era(s), ${lang.proto.eras.reduce((n, e) => n + e.changes.length, 0)} rules</dd>
       <dt>Spelling</dt><dd>${invSorted().length - unspelledSounds(lang).length} of ${invSorted().length} sounds spelled, ${lang.orthography.rules.length} rules, from ${esc(lang.orthography.basis)}</dd>
       <dt>Syllables</dt><dd>${Object.keys(lang.syllables.classes).length} classes, ${["any","initial","medial","final"].reduce((n, p) => n + lang.syllables.shapes[p].length, 0)} patterns, roots ${lang.syllables.rootLength.min}–${lang.syllables.rootLength.max} syllables</dd>
       <dt>Meanings</dt><dd>${lang.meanings.length} (${Object.keys(lang.partsOfSpeech).length} parts of speech), ${words.size} with a word</dd>
@@ -3079,7 +3349,7 @@ if (typeof document !== "undefined") (function () {
       const x = ev.target.closest("[data-x]"); if (!x) return;
       if (x.dataset.x === "export") return exportFile();
       if (x.dataset.x === "cancel") return closeSheet();
-      lang = skeleton(); meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet(); render(); toast("New language started");
+      lang = skeleton(); resetSession(); meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet(); render(); toast("New language started");
     });
   }
   $("menuBtn").addEventListener("click", () => {
@@ -3088,6 +3358,7 @@ if (typeof document !== "undefined") (function () {
       <button class="menuitem" data-m="upload">Upload language file<small>Restore a backup or move work from another device.</small></button>
       <button class="menuitem" data-m="msheet">Meaning sheet<small>Hand your words to an AI chat for meanings, then bring them back.</small></button>
       <button class="menuitem" data-m="settings">Settings<small>Veto order, near-twins.</small></button>
+      ${lang.proto.enabled === true || lang.proto.enabled === false ? `<button class="menuitem" data-m="path">Change path<small>Now: ${lang.proto.enabled ? "develop from proto roots" : "start modern"}.</small></button>` : ""}
       <button class="menuitem" data-m="check">Diagnostics<small>Health check: file check, gaps, near-twins, shape rules, sound frequency.</small></button>
       <button class="menuitem" data-m="new">New language<small>Start from a blank file.</small></button>`, ev => {
       const m = ev.target.closest("[data-m]"); if (!m) return;
@@ -3097,6 +3368,7 @@ if (typeof document !== "undefined") (function () {
       else if (k === "check") openFileCheck();
       else if (k === "msheet") openMeaningSheet();
       else if (k === "settings") openSettings();
+      else if (k === "path") openChangePath();
       else if (k === "new") openNew();
     });
   });
