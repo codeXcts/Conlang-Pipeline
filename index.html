@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-11-2122">
+<meta name="build" content="build 2026-11-11-2253">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,11 +247,11 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-11-2122 (made on build 2026-11-11-1457)
+   Conlang Pipeline — build 2026-11-11-2253 (made on build 2026-11-11-2122)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-11-2122";
-const BASE_BUILD = "build 2026-11-11-1457";
+const BUILD = "build 2026-11-11-2253";
+const BASE_BUILD = "build 2026-11-11-2122";
 const FORMAT = "conlang-pipeline";
 const VERSION = 3;
 const STORE_KEY = "conlang-pipeline:autosave";
@@ -1684,6 +1684,19 @@ function nearTwinPairs(lang) {
   return pairs;
 }
 
+// Remove words and/or meanings (Chilly, 2026-11-11). opts: { unlocked, locked, vetoed, meanings, pos } — each true removes that part.
+// Removing meanings detaches every word from its meaning; removing parts of speech needs meanings removed too and clears shape-rule limits.
+function removeParts(lang, opts) {
+  const keep = w => !isObj(w) || !((w.status === "live" && opts.unlocked) || (w.status === "locked" && opts.locked) || (w.status === "vetoed" && opts.vetoed));
+  const before = lang.lexicon.length;
+  lang.lexicon = lang.lexicon.filter(keep);
+  if (opts.meanings) {
+    lang.meanings = [];
+    for (const w of lang.lexicon) if (isObj(w)) w.slot = null;
+    if (opts.pos) { lang.partsOfSpeech = {}; for (const r of lang.shapes) if (isObj(r)) r.appliesTo = []; }
+  }
+  return before - lang.lexicon.length;
+}
 // Regeneration keeps vetoed and locked entries and redoes only the rest.
 function clearUnlocked(lang) {
   const before = lang.lexicon.length;
@@ -1806,7 +1819,7 @@ function nextWordId(lang) {
 }
 
 /* Expose the core for tests (Node). */
-if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
+if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, removeParts, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
 
 /* ============================================================
    Interface
@@ -2504,7 +2517,7 @@ if (typeof document !== "undefined") (function () {
       ${lk.length ? `<div class="inv"><div class="row"><b>Learned</b>${lk.slice(0, 24).map(k => `<span class="chip"><span class="ipa">${esc(k)}</span> <span class="${L[k] > 0 ? "up" : "down"}">${L[k] > 0 ? "+" : ""}${L[k].toFixed(2)}</span></span>`).join("")}</div></div>` : ""}`;
     // 2. words
     h += `<h2>Words</h2><p class="ghint">${words.length} word${words.length === 1 ? "" : "s"} · ${words.length - withM} without a meaning · ${withM} with one · ${locked} locked. Identical modern forms are never made${lang.settings.blockNearTwins ? ", and near-twins are blocked" : "; near-twins (one sound apart) are allowed and flagged on the veto screen"}.</p>
-      <div class="toolbar"><button class="btn primary" data-act="gen">${anyGen ? `Generate ${GENERATE_BATCH} more` : `Generate ${GENERATE_BATCH} words`}</button>${live ? `<button class="btn" data-act="regen">Regenerate unlocked words</button>` : ""}</div>
+      <div class="toolbar"><button class="btn primary" data-act="gen">${anyGen ? `Generate ${GENERATE_BATCH} more` : `Generate ${GENERATE_BATCH} words`}</button>${live ? `<button class="btn" data-act="regen">Regenerate unlocked words</button>` : ""}${lang.lexicon.length || M.length ? `<button class="btn" data-act="clearw">Remove words…</button>` : ""}</div>
       ${ui.genNotes && ui.genNotes.length ? ui.genNotes.map(n => `<div class="warnline" style="margin:6px 0">${esc(n)}</div>`).join("") : ""}`;
     if (words.length) {
       const show = ui.allWords ? words : words.slice(0, 24);
@@ -2527,6 +2540,33 @@ if (typeof document !== "undefined") (function () {
         <div class="toolbar"><button class="btn" data-act="addm">+ Add meaning</button><button class="btn" data-act="importm">Import more</button><button class="btn" data-act="posed">Parts of speech (${posIds.length})</button></div>`;
     }
     return h + stageNav(i);
+  }
+  // Remove words and/or meanings, chosen with ticks. Nothing is ticked that touches locked words, vetoed records or meanings unless you tick it.
+  function openRemove() {
+    const lx = lang.lexicon.filter(isObj), live = lx.filter(w => w.status === "live"), locked = lx.filter(w => w.status === "locked"), vetoed = lx.filter(w => w.status === "vetoed");
+    const nM = lang.meanings.length, nP = Object.keys(lang.partsOfSpeech).length, meant = live.filter(w => w.slot).length;
+    const row = (id, n, label, hint, on) => n ? `<label class="tick"><input type="checkbox" id="${id}" ${on ? "checked" : ""}> ${label} (${n})${hint ? `<br><span class="muted small">${hint}</span>` : ""}</label>` : "";
+    openSheet(`<h2>Remove words</h2>
+      <p class="muted small" style="margin:0 0 8px">Tick what to remove. This can't be undone, so export a backup first if you're unsure.</p>
+      ${row("rmU", live.length, "Unlocked words", meant ? `${meant} of them have a meaning.` : "", true)}
+      ${row("rmL", locked.length, "🔒 Locked words", "Including starred words.", false)}
+      ${row("rmV", vetoed.length, "Vetoed words", "Forget them, so their forms can be generated again.", false)}
+      ${row("rmM", nM, "The meaning list", "Every word loses its meaning; the words themselves stay unless ticked above.", false)}
+      ${row("rmP", nP, "Parts of speech", "Only with the meaning list. Shape rules limited to them apply to all roots again.", false)}
+      <p class="err-text" id="rmErr"></p>
+      <div class="actions"><button class="btn" data-x="backup">Export backup</button><button class="btn" data-x="cancel">Cancel</button><button class="btn danger" data-x="go">Remove</button></div>`, ev => {
+      const x = ev.target.closest("[data-x]"); if (!x) return;
+      if (x.dataset.x === "cancel") return closeSheet();
+      if (x.dataset.x === "backup") return exportFile();
+      if (x.dataset.x !== "go") return;
+      const on = id => !!($(id) && $(id).checked);
+      const opts = { unlocked: on("rmU"), locked: on("rmL"), vetoed: on("rmV"), meanings: on("rmM"), pos: on("rmP") };
+      if (opts.pos && !opts.meanings) { $("rmErr").textContent = "Parts of speech can only go together with the meaning list."; return; }
+      if (!Object.values(opts).some(Boolean)) { $("rmErr").textContent = "Tick something to remove."; return; }
+      const n = removeParts(lang, opts);
+      ui.genNotes = null; ui.vetoIdx = 0; closeSheet(); changed(); render();
+      toast([n ? `Removed ${n} word${n === 1 ? "" : "s"}` : "", opts.meanings ? "meaning list cleared" : ""].filter(Boolean).join("; "));
+    });
   }
   function doGenerate() {
     const r = generateWords(lang, GENERATE_BATCH, (Math.random() * 4294967296) >>> 0);
@@ -3225,6 +3265,7 @@ if (typeof document !== "undefined") (function () {
     else if (act === "unlearnall") { lang.comfort.learned = {}; changed(); render(); toast("Learned values reset"); }
     else if (act === "gen") doGenerate();
     else if (act === "allw") { ui.allWords = !ui.allWords; render(); }
+    else if (act === "clearw") openRemove();
     else if (act === "sheetout") openMeaningSheet("out");
     else if (act === "sheetin") openMeaningSheet("in");
     else if (act === "regen") {
