@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-11-1457">
+<meta name="build" content="build 2026-11-11-2122">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,11 +247,11 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-11-1457 (made on build 2026-11-10-2321)
+   Conlang Pipeline — build 2026-11-11-2122 (made on build 2026-11-11-1457)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-11-1457";
-const BASE_BUILD = "build 2026-11-10-2321";
+const BUILD = "build 2026-11-11-2122";
+const BASE_BUILD = "build 2026-11-11-1457";
 const FORMAT = "conlang-pipeline";
 const VERSION = 3;
 const STORE_KEY = "conlang-pipeline:autosave";
@@ -857,7 +857,11 @@ function segmentWord(word, env) {
   }
   return out;
 }
-// Spaces separate sounds ("t s" = t then s); inside a chunk, longest match.
+// Marks that belong to the sound before them: length ː ˑ, ʰ ʲ ʷ and other modifier letters, combining diacritics.
+const MARK_RE = /[\u0300-\u036F\u02B0-\u02FF\u1DC0-\u1DFF]/;
+function takeMarks(chunk, j) { let k = j; while (k < chunk.length && MARK_RE.test(chunk[k])) k++; return chunk.slice(j, k); }
+// Spaces separate sounds ("t s" = t then s); inside a chunk, longest match. A mark after a sound or class belongs to it:
+// "aː" is one sound even if only "a" is known (new on the right of >), and "Vː" is "any V, long" (on the right: the same V made long).
 function tokenizeSide(str, env, opts) {
   const toks = [];
   for (const chunk of str.trim().split(/\s+/).filter(Boolean)) {
@@ -869,11 +873,18 @@ function tokenizeSide(str, env, opts) {
       const snd = env.sorted.find(x => chunk.startsWith(x, i));
       if (/[A-Z]/.test(ch) && ch in env.classes && !(snd && snd.length > 1)) {
         if (!opts.classes) throw `Use sounds, not classes, on the left of > (found class ${ch}).`;
-        toks.push({ t: "class", L: ch }); i++; continue;
+        const suf = takeMarks(chunk, i + 1);
+        toks.push(suf ? { t: "class", L: ch, suf } : { t: "class", L: ch }); i += 1 + suf.length; continue;
       }
-      if (snd) { toks.push({ t: "sound", s: snd }); i += snd.length; continue; }
+      if (snd) {
+        const marks = takeMarks(chunk, i + snd.length);
+        if (!marks) { toks.push({ t: "sound", s: snd }); i += snd.length; continue; }
+        const whole = snd + marks; // longest match already tried every known sound, so this one is new
+        if (!opts.loose) throw `"${whole}" isn't one of your sounds.`;
+        toks.push({ t: "sound", s: whole, isNew: true }); i += whole.length; continue;
+      }
       if (opts.loose && !/[A-Z#_\/>]/.test(ch)) { // a brand-new sound: take the character plus any marks after it
-        let j = i + 1; while (j < chunk.length && /[̀-ͯʰ-˿᷀-᷿]/.test(chunk[j])) j++;
+        const j = i + 1 + takeMarks(chunk, i + 1).length;
         toks.push({ t: "sound", s: chunk.slice(i, j), isNew: true }); i = j; continue;
       }
       throw /[A-Z]/.test(ch) ? `There's no class ${ch}.` : `"${ch}" isn't one of your sounds.`;
@@ -931,7 +942,18 @@ function parseRule(src, env, opts) {
     return { target, repl, left, right, insert };
   } catch (e) { return { error: String(e) }; }
 }
-function tokMatch(tok, seg, env) { return tok.t === "sound" ? seg === tok.s : tok.t === "class" ? (env.classes[tok.L] || []).includes(seg) : false; }
+// A class token with a suffix (Vː) matches a member plus that suffix.
+function classBase(tok, seg) { const suf = tok.suf || ""; return !suf ? seg : (typeof seg === "string" && seg.length > suf.length && seg.endsWith(suf) ? seg.slice(0, -suf.length) : null); }
+function tokMatch(tok, seg, env) {
+  if (tok.t === "sound") return seg === tok.s;
+  if (tok.t !== "class") return false;
+  const b = classBase(tok, seg); return b !== null && (env.classes[tok.L] || []).includes(b);
+}
+// The sound a class token on the right gives for the segment its class on the left matched (same position in the class, plus its suffix).
+function mapClass(fromTok, toTok, seg, env) {
+  const from = env.classes[fromTok.L] || [], to = env.classes[toTok.L] || [], idx = from.indexOf(classBase(fromTok, seg));
+  return idx >= 0 && to[idx] !== undefined ? to[idx] + (toTok.suf || "") : seg;
+}
 function ctxOk(r, segs, start, end, env) {
   let p = start - 1;
   for (let k = r.left.length - 1; k >= 0; k--) {
@@ -970,10 +992,7 @@ function applyChange(pr, segs, env) {
     matched = true;
     pr.repl.forEach((t, k) => {
       if (t.t === "sound") out.push(t.s);
-      else {
-        const from = env.classes[pr.target[k].L] || [], to = env.classes[t.L] || [], idx = from.indexOf(segs[i + k]);
-        out.push(idx >= 0 && to[idx] !== undefined ? to[idx] : segs[i + k]);
-      }
+      else out.push(mapClass(pr.target[k], t, segs[i + k], env));
     });
     i += n;
   }
@@ -998,16 +1017,22 @@ function eraInventories(lang) {
       const pr = isObj(ch) && typeof ch.rule === "string" ? parseRule(ch.rule, env, { mode: "change" }) : { error: "Not a rule." };
       rules.push({ ch, pr, env });
       if (pr.error) continue;
-      const live = pr.target.every(t => t.t === "sound" ? set.has(t.s) : (env.classes[t.L] || []).some(m => set.has(m)));
+      const live = pr.target.every(t => t.t === "sound" ? set.has(t.s) : (env.classes[t.L] || []).some(m => set.has(m + (t.suf || ""))));
       if (!live) continue;
       const pct = typeof ch.percent === "number" ? ch.percent : 100;
       const everywhere = !pr.left.length && !pr.right.length && pct >= 100 && !pr.insert && pr.target.length === 1;
       if (pr.target.length === 1 && pr.target[0].t === "class" && pr.repl.length === 1 && pr.repl[0].t === "class") {
-        const from = env.classes[pr.target[0].L] || [], to = env.classes[pr.repl[0].L] || [];
-        for (const m of from.filter(x => set.has(x))) { const y = to[from.indexOf(m)]; if (y !== undefined) add(y); if (everywhere && y !== m) del(m); }
+        const ft = pr.target[0], from = env.classes[ft.L] || [];
+        for (const m of from.map(x => x + (ft.suf || "")).filter(x => set.has(x))) { const y = mapClass(ft, pr.repl[0], m, env); add(y); if (everywhere && y !== m) del(m); }
         continue;
       }
       for (const t of pr.repl) if (t.t === "sound") add(t.s);
+      // A class on the right (e.g. V s > Vː) can make new sounds too: one for each matched sound you have.
+      pr.repl.forEach((t, k) => {
+        if (t.t !== "class" || !pr.target[k] || pr.target[k].t !== "class") return;
+        const ft = pr.target[k];
+        for (const m of (env.classes[ft.L] || []).map(x => x + (ft.suf || "")).filter(x => set.has(x))) add(mapClass(ft, t, m, env));
+      });
       if (everywhere && pr.target[0].t === "sound" && !pr.repl.some(t => t.s === pr.target[0].s)) del(pr.target[0].s);
     }
     eras.push({ era, rules, inventory: order.slice() });
@@ -1513,46 +1538,34 @@ function slotHasWord(lang) {
   for (const w of lang.lexicon) if (isObj(w) && w.slot && (w.status === "live" || w.status === "locked")) m.set(w.slot, w);
   return m;
 }
-/* Generate words for every meaning that has none. Shortest words go to the highest-ranked meanings; ties break by comfort.
-   Shape rules limited to parts of speech are checked against each meaning's part of speech. */
-function generateLexicon(lang, seed) {
+/* Generate up to `count` new words without meanings (Chilly, 2026-11-11: no automatic assignment; meanings come back
+   from the meaning sheet). Same checks as always: distinct proto and modern forms, never a vetoed form, all-roots shape
+   rules, near-twin block if on. Shape rules limited to parts of speech are checked when a meaning arrives (the sheet reports clashes). */
+const GENERATE_BATCH = 500;
+function posSlug(label) { return String(label).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "pos"; }
+function generateWords(lang, count, seed) {
   const g = buildGenerator(lang);
   if (g.error) return { error: g.error, fix: g.fix };
-  const filled = slotHasWord(lang);
-  const empty = lang.meanings.slice().sort((a, b) => a.rank - b.rank).filter(m => !filled.has(m.id));
-  if (!empty.length) return { added: 0, unfilled: [], notes: [] };
   const rng = makeRng(seed >>> 0), env = langEnv(lang);
   const takenP = new Set(), takenS = new Set(), existing = [];
   const segEnv = envWith(env, [...env.symbols, ...CAT.keys()]);
   for (const w of lang.lexicon) if (isObj(w)) { takenP.add(w.proto); takenS.add(w.surface); if (w.status !== "vetoed") existing.push(segmentWord(w.surface, segEnv)); }
-  const want = Math.ceil(empty.length * 2.5) + 20, pool = [];
-  for (let tries = 0; pool.length < want && tries < want * 60; tries++) {
+  const made = [];
+  for (let tries = 0; made.length < count && tries < count * 60; tries++) {
     const w = g.gen(rng);
     if (takenP.has(w.proto)) continue;
+    takenP.add(w.proto);
     const ev = evolve(lang, w.proto), surface = ev.segs.join("");
     if (takenS.has(surface)) continue;
-    takenP.add(w.proto);
     if (shapeReject(lang, w.proto, null, ev) >= 0) continue;
-    if (lang.settings.blockNearTwins) {
-      const segs = ev.segs;
-      if (existing.some(x => nearTwin(x, segs)) || pool.some(p => nearTwin(p.ev.segs, segs))) continue;
-    }
+    if (lang.settings.blockNearTwins && (existing.some(x => nearTwin(x, ev.segs)) || made.some(m => nearTwin(m.segs, ev.segs)))) continue;
     takenS.add(surface);
-    pool.push({ w, ev, surface, len: ev.segs.length, comfort: comfortScore(lang, w.proto) });
+    made.push({ proto: w.proto, surface, segs: ev.segs });
   }
-  pool.sort((a, b) => a.len - b.len || b.comfort - a.comfort);
-  let idNum = 0; for (const w of lang.lexicon) { const r = isObj(w) && /^w(\d+)$/.exec(w.id); if (r) idNum = Math.max(idNum, Number(r[1])); }
-  const used = new Set(), unfilled = []; let added = 0;
-  for (const m of empty) {
-    const k = pool.findIndex((p, i) => !used.has(i) && shapeReject(lang, p.w.proto, m.pos, p.ev) < 0);
-    if (k < 0) { unfilled.push(m); continue; }
-    used.add(k); const p = pool[k];
-    lang.lexicon.push({ id: "w" + String(++idNum).padStart(4, "0"), proto: p.w.proto, surface: p.surface, slot: m.id, status: "live", reviewed: false, source: "generated" });
-    added++;
-  }
+  for (const m of made) lang.lexicon.push({ id: nextWordId(lang), proto: m.proto, surface: m.surface, slot: null, status: "live", reviewed: false, source: "generated" });
   const notes = g.notes.slice();
-  if (unfilled.length) notes.push(`${unfilled.length} meaning${unfilled.length === 1 ? "" : "s"} got no word: the rules allow too few different roots. Loosen the syllable or shape rules, or raise the root length, then generate again.`);
-  return { added, unfilled, notes };
+  if (made.length < count) notes.push(`Only ${made.length} of ${count} new words could be made: your rules leave little room for more different roots. Loosen the syllable or shape rules, or raise the root length.`);
+  return { added: made.length, notes };
 }
 // One new word for one meaning, passing the same checks. Picks the candidate closest in length to targetLen, then the most comfortable.
 function replacementFor(lang, slotId, targetLen, seed) {
@@ -1585,13 +1598,17 @@ function nearTwinsOf(lang, entry) {
 /* Meaning sheet: plain text for an AI chat. One row per word: word id | word | part of speech | meaning. */
 function meaningSheetText(lang) {
   const slots = new Map(lang.meanings.map(m => [m.id, m]));
-  const words = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed")
-    .sort((a, b) => (slots.has(a.slot) ? slots.get(a.slot).rank : 1e9) - (slots.has(b.slot) ? slots.get(b.slot).rank : 1e9) || a.id.localeCompare(b.id));
+  // Shortest first (by sounds in the modern form), so short words can go to the most-used meanings.
+  const env = langEnv(lang), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]), len = new Map();
+  const words = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed");
+  for (const w of words) len.set(w, segmentWord(w.surface, segEnv).length);
+  words.sort((a, b) => len.get(a) - len.get(b) || a.id.localeCompare(b.id));
   const posL = id => (lang.partsOfSpeech[id] && lang.partsOfSpeech[id].label) || id || "";
   const lines = [
-    `# Meaning sheet for ${lang.language.name || "my conlang"}. One row per word.`,
+    `# Meaning sheet for ${lang.language.name || "my conlang"}. One row per word, shortest words first.`,
     "# Columns: word id | word (spelling /pronunciation/) | part of speech | meaning",
-    "# Fill in or change the meaning column only. Keep the word id. A blank meaning is left as it is.",
+    "# Fill in part of speech and meaning for the words you use. Keep the word id. Rows left blank stay as they are.",
+    "# Each meaning belongs to one word: two words can't share the exact same meaning (use e.g. big / large). A meaning can't contain |.",
     "word id | word | part of speech | meaning"
   ];
   for (const w of words) {
@@ -1602,7 +1619,7 @@ function meaningSheetText(lang) {
 }
 // Merge meanings back from a sheet. Works on a copy and reports what would change; nothing but meanings changes.
 function mergeMeaningSheet(lang, text) {
-  const next = clone(lang), st = { set: 0, created: 0, unchanged: 0, blank: 0, unknown: [], bad: 0, displaced: [], shapeClash: 0 };
+  const next = clone(lang), st = { set: 0, created: 0, unchanged: 0, blank: 0, unknown: [], bad: 0, displaced: [], shapeClash: 0, newPos: [] };
   const byLabel = {}; for (const [id, p] of Object.entries(next.partsOfSpeech)) { byLabel[id.toLowerCase()] = id; byLabel[String(p.label).toLowerCase()] = id; }
   let n = nextSlotNum(next);
   for (const raw of String(text).split(/\r?\n/)) {
@@ -1619,7 +1636,12 @@ function mergeMeaningSheet(lang, text) {
     if (cur && cur.gloss.toLowerCase() === gloss.toLowerCase()) { st.unchanged++; continue; }
     let slot = next.meanings.find(m => m.gloss.toLowerCase() === gloss.toLowerCase());
     if (!slot) {
-      const pos = byLabel[posTxt.toLowerCase()] || (cur && cur.pos) || Object.keys(next.partsOfSpeech)[0] || "";
+      // A part of speech the sheet names that the language doesn't have yet is added (and listed in the check).
+      let pos = posTxt ? byLabel[posTxt.toLowerCase()] : (cur && cur.pos) || "";
+      if (posTxt && !pos) {
+        pos = posSlug(posTxt); while (next.partsOfSpeech[pos]) pos += "-2";
+        next.partsOfSpeech[pos] = { label: posTxt, note: "" }; byLabel[posTxt.toLowerCase()] = pos; byLabel[pos] = pos; st.newPos.push(posTxt);
+      }
       slot = { id: slotId(n++), gloss, pos, rank: next.meanings.length + 1 }; next.meanings.push(slot); st.created++;
     }
     for (const o of next.lexicon) if (isObj(o) && o !== e && o.status !== "vetoed" && o.slot === slot.id) { o.slot = null; st.displaced.push(o.id); }
@@ -1784,7 +1806,7 @@ function nextWordId(lang) {
 }
 
 /* Expose the core for tests (Node). */
-if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateLexicon, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
+if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
 
 /* ============================================================
    Interface
@@ -1960,7 +1982,7 @@ if (typeof document !== "undefined") (function () {
     const proto = L.proto.enabled === true;
     const tail = [
       { id: "shapes", name: "Shape rules", built: true },
-      { id: "generate", name: "Generate and assign meanings", built: true },
+      { id: "generate", name: "Generate words", built: true },
       { id: "veto", name: "Veto", built: true },
       { id: "grammar", name: "Grammar" }
     ];
@@ -2315,9 +2337,9 @@ if (typeof document !== "undefined") (function () {
   function changeInfo(src) {
     const pr = parseRule(src, changeEnvAll(), { mode: "change" });
     if (pr.error) return `<span class="blk err-text">${esc(pr.error)}</span>`;
-    const t = x => x.t === "#" ? "word edge" : x.t === "class" ? `any ${x.L}` : x.s;
+    const t = x => x.t === "#" ? "word edge" : x.t === "class" ? `any ${x.L}${x.suf ? " + " + x.suf : ""}` : x.s;
     const where = [pr.left.length ? `after ${pr.left.map(t).join(" ")}` : "", pr.right.length ? `before ${pr.right.map(t).join(" ")}` : ""].filter(Boolean).join(", ").replace(/^after word edge$/, "at the start of the word").replace(/^before word edge$/, "at the end of the word").replace("after word edge", "at the word start").replace("before word edge", "at the word end") || "everywhere";
-    const tgt = pr.target.map(t).join(" "), out = pr.repl.map(x => x.t === "class" ? `the matching ${x.L}` : x.s).join(" ");
+    const tgt = pr.target.map(t).join(" "), out = pr.repl.map((x, k) => x.t !== "class" ? x.s : `${pr.target[k] && pr.target[k].L === x.L ? "the same sound" : `the matching ${x.L}`}${x.suf ? " + " + x.suf : ""}`).join(" ");
     const txt = pr.insert ? `${out} is added ${where}` : !pr.repl.length ? `${tgt} is dropped ${where}` : `${tgt} becomes ${out} ${where}`;
     const einv = eraInventories(lang), protoInv = new Set(einv.proto), ever = new Set([...einv.proto, ...einv.eras.flatMap(e => e.inventory)]);
     const fresh = pr.repl.filter(x => x.t === "sound" && !protoInv.has(x.s)).map(x => x.s);
@@ -2455,55 +2477,66 @@ if (typeof document !== "undefined") (function () {
     });
   }
 
-  /* ---- generate and assign meanings ---- */
+  /* ---- generate words; meanings come back through the meaning sheet ---- */
   const posLabel = id => (lang.partsOfSpeech[id] && lang.partsOfSpeech[id].label) || id || "—";
   function wordForSlotHTML(w) {
     if (!w) return '<span class="muted small">no word yet</span>';
     return `<b>${esc(spellProto(lang, w.proto))}</b> <span class="muted small ipa">/${esc(w.surface)}/</span>${w.status === "locked" ? ' <span title="Locked">🔒</span>' : ""}`;
   }
+  // Live and locked words, shortest modern form first (the order of the exported sheet).
+  function wordsShortestFirst() {
+    const env = langEnv(lang), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]), len = new Map();
+    const ws = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed");
+    for (const w of ws) len.set(w, segmentWord(w.surface, segEnv).length);
+    return ws.sort((a, b) => len.get(a) - len.get(b) || a.id.localeCompare(b.id));
+  }
   function renderGenerate(i) {
-    const head = stageHead(i, "The meaning list, then the words. Shorter words go to higher-ranked meanings. Nothing here is decided for you: load a starter list or your own, and every meaning stays editable.");
-    const M = lang.meanings.slice().sort((a, b) => a.rank - b.rank), filled = slotHasWord(lang);
+    const head = stageHead(i, `Make words without meanings, ${GENERATE_BATCH} at a time, then hand them to an AI chat (or anyone) to give them meanings. Nothing is assigned for you: meanings come back through the word list.`);
+    const M = lang.meanings.slice().sort((a, b) => a.rank - b.rank), filled = slotHasWord(lang), slots = new Map(lang.meanings.map(m => [m.id, m]));
     const posIds = Object.keys(lang.partsOfSpeech);
+    const words = wordsShortestFirst(), withM = words.filter(w => w.slot && slots.has(w.slot)).length, locked = words.filter(w => w.status === "locked").length;
+    const live = words.filter(w => w.status === "live").length, anyGen = lang.lexicon.some(w => isObj(w) && w.source === "generated" && w.status !== "vetoed");
     let h = head;
-    // 1. meaning list
-    h += `<h2>Meaning list</h2>`;
-    if (!M.length) {
-      h += `<p class="ghint">A ranked list of meanings to give words to. The starter list joins two public core-vocabulary lists: the Leipzig–Jakarta 100 and the Swadesh 207 (226 meanings, overlaps merged). Meanings on both lists come first, then the other Leipzig–Jakarta ones, then the other Swadesh ones. That order is about how stable words are, not how often they're used, so you may want to move very common words (like we, they, and) up.</p>
-        <div class="toolbar"><button class="btn primary" data-act="starter">Use the starter list (226)</button><button class="btn" data-act="importm">Import my own</button></div>`;
-    } else {
-      const show = ui.allMeanings ? M : M.slice(0, 15);
-      h += `<p class="ghint">${M.length} meanings · ${filled.size} have a word. Tap a meaning to rename it, change its part of speech, move it, or attach a starred word.</p>
-        <div class="mlist">${show.map(m => `<button class="mrow" data-act="meaning" data-id="${esc(m.id)}"><span class="rank">${m.rank}</span><span class="grow"><span class="blk">${esc(m.gloss)} <span class="poschip">${esc(posLabel(m.pos))}</span></span><span class="blk">${wordForSlotHTML(filled.get(m.id))}</span></span></button>`).join("")}</div>
-        ${M.length > 15 ? `<p><button class="linkbtn" data-act="allm">${ui.allMeanings ? "Show the first 15 only" : `Show all ${M.length}`}</button></p>` : ""}
-        <div class="toolbar"><button class="btn" data-act="addm">+ Add meaning</button><button class="btn" data-act="importm">Import more</button><button class="btn" data-act="posed">Parts of speech (${posIds.length})</button></div>`;
-    }
-    // 2. calibration
+    // 1. calibration
     const L = lang.comfort.learned, lk = Object.keys(L).sort((a, b) => Math.abs(L[b]) - Math.abs(L[a]));
     h += `<h2>Calibration</h2><p class="ghint">Optional, before generating: keep or veto 10 test words. Plain counting nudges each sound's comfort up or down, so later words lean toward your taste. Your sliders don't change; the learned part is shown beside them and can be reset.</p>
       <div class="toolbar"><button class="btn" data-act="calib">Run a 10-word calibration</button>${lk.length ? `<button class="btn" data-act="unlearnall">Reset all learned</button>` : ""}</div>
       ${lk.length ? `<div class="inv"><div class="row"><b>Learned</b>${lk.slice(0, 24).map(k => `<span class="chip"><span class="ipa">${esc(k)}</span> <span class="${L[k] > 0 ? "up" : "down"}">${L[k] > 0 ? "+" : ""}${L[k].toFixed(2)}</span></span>`).join("")}</div></div>` : ""}`;
-    // 3. generate
-    const live = lang.lexicon.filter(w => isObj(w) && w.status === "live").length, locked = lang.lexicon.filter(w => isObj(w) && w.status === "locked" && w.slot).length;
-    const emptyN = M.filter(m => !filled.has(m.id)).length;
-    h += `<h2>Generate</h2>`;
-    if (!M.length) h += `<p class="muted small">Add a meaning list first.</p>`;
-    else {
-      h += `<p class="ghint">${emptyN} meaning${emptyN === 1 ? "" : "s"} without a word · ${live} generated · ${locked} locked with a meaning. Identical modern forms are never made${lang.settings.blockNearTwins ? ", and near-twins are blocked" : "; near-twins (one sound apart) are allowed and will be flagged on the veto screen"}.</p>
-        <div class="toolbar">${emptyN ? `<button class="btn primary" data-act="gen">Generate ${emptyN} word${emptyN === 1 ? "" : "s"}</button>` : ""}${live ? `<button class="btn" data-act="regen">Regenerate unlocked words</button>` : ""}</div>
-        ${ui.genNotes && ui.genNotes.length ? ui.genNotes.map(n => `<div class="warnline" style="margin:6px 0">${esc(n)}</div>`).join("") : ""}`;
+    // 2. words
+    h += `<h2>Words</h2><p class="ghint">${words.length} word${words.length === 1 ? "" : "s"} · ${words.length - withM} without a meaning · ${withM} with one · ${locked} locked. Identical modern forms are never made${lang.settings.blockNearTwins ? ", and near-twins are blocked" : "; near-twins (one sound apart) are allowed and flagged on the veto screen"}.</p>
+      <div class="toolbar"><button class="btn primary" data-act="gen">${anyGen ? `Generate ${GENERATE_BATCH} more` : `Generate ${GENERATE_BATCH} words`}</button>${live ? `<button class="btn" data-act="regen">Regenerate unlocked words</button>` : ""}</div>
+      ${ui.genNotes && ui.genNotes.length ? ui.genNotes.map(n => `<div class="warnline" style="margin:6px 0">${esc(n)}</div>`).join("") : ""}`;
+    if (words.length) {
+      const show = ui.allWords ? words : words.slice(0, 24);
+      h += `<div class="mlist">${show.map(w => { const m = slots.get(w.slot); return `<button class="mrow" data-act="trace" data-proto="${esc(w.proto)}"><span class="grow"><span class="blk">${wordForSlotHTML(w)}</span><span class="blk small">${m ? `${esc(m.gloss)} <span class="poschip">${esc(posLabel(m.pos))}</span>` : '<span class="muted">no meaning yet</span>'}</span></span></button>`; }).join("")}</div>
+        ${words.length > 24 ? `<p><button class="linkbtn" data-act="allw">${ui.allWords ? "Show the first 24 only" : `Show all ${words.length}`}</button></p>` : ""}`;
+    }
+    // 3. hand the words to an AI chat and bring the meanings back
+    h += `<h2>Give them meanings</h2><p class="ghint">Export the word list (shortest words first) for your lexicon and grammar chats. They fill in part of speech and meaning for the words they use; you upload the result. Only meanings and parts of speech come back, and you see what would change before anything does. Veto first if you want to cut words.</p>
+      <div class="toolbar"><button class="btn primary" data-act="sheetout" ${words.length ? "" : "disabled"}>Export word list</button><button class="btn" data-act="sheetin" ${words.length ? "" : "disabled"}>Upload meanings</button></div>`;
+    // 4. meanings
+    h += `<h2>Meanings</h2>`;
+    if (!M.length) {
+      h += `<p class="ghint">None yet. Meanings arrive with the uploaded word list. You can also add them by hand, import a list (one per line), or load the 226 core-vocabulary starter list (Leipzig–Jakarta 100 + Swadesh 207, ordered by stability, not frequency).</p>
+        <div class="toolbar"><button class="btn" data-act="addm">+ Add meaning</button><button class="btn" data-act="importm">Import a list</button><button class="btn" data-act="starter">Load the starter list (226)</button></div>`;
+    } else {
+      const show = ui.allMeanings ? M : M.slice(0, 15);
+      h += `<p class="ghint">${M.length} meanings · ${filled.size} have a word. Tap a meaning to rename it, change its part of speech, move it, or attach a word without a meaning.</p>
+        <div class="mlist">${show.map(m => `<button class="mrow" data-act="meaning" data-id="${esc(m.id)}"><span class="rank">${m.rank}</span><span class="grow"><span class="blk">${esc(m.gloss)} <span class="poschip">${esc(posLabel(m.pos))}</span></span><span class="blk">${wordForSlotHTML(filled.get(m.id))}</span></span></button>`).join("")}</div>
+        ${M.length > 15 ? `<p><button class="linkbtn" data-act="allm">${ui.allMeanings ? "Show the first 15 only" : `Show all ${M.length}`}</button></p>` : ""}
+        <div class="toolbar"><button class="btn" data-act="addm">+ Add meaning</button><button class="btn" data-act="importm">Import more</button><button class="btn" data-act="posed">Parts of speech (${posIds.length})</button></div>`;
     }
     return h + stageNav(i);
   }
   function doGenerate() {
-    const r = generateLexicon(lang, (Math.random() * 4294967296) >>> 0);
+    const r = generateWords(lang, GENERATE_BATCH, (Math.random() * 4294967296) >>> 0);
     if (r.error) { ui.genNotes = [r.error]; render(); return; }
     ui.genNotes = r.notes; changed(); render(); toast(`Generated ${r.added} word${r.added === 1 ? "" : "s"}`);
   }
   // Regenerate on a copy: the old words are only replaced once generation has worked.
   function doRegenerate() {
     const next = clone(lang); clearUnlocked(next);
-    const r = generateLexicon(next, (Math.random() * 4294967296) >>> 0);
+    const r = generateWords(next, GENERATE_BATCH, (Math.random() * 4294967296) >>> 0);
     if (r.error) { ui.genNotes = [`${r.error} Nothing was regenerated; your words are unchanged.`]; render(); return; }
     lang = next; ui.genNotes = r.notes; changed(); render(); toast(`Regenerated ${r.added} word${r.added === 1 ? "" : "s"}`);
   }
@@ -2629,39 +2662,44 @@ if (typeof document !== "undefined") (function () {
 
   /* ---- veto screen ---- */
   const vetoSeed = (Math.random() * 4294967296) >>> 0;
+  // Cards are words (live or locked), with or without a meaning. A card's place in the deck comes from its key:
+  // its meaning if it has one, otherwise its word id; a replacement inherits the vetoed word's key, so it appears on the same card.
+  const cardKeys = new Map();
+  const cardKey = w => cardKeys.get(w.id) || (w.slot ? "m:" + w.slot : "w:" + w.id);
+  function deckWords() { return lang.lexicon.filter(w => isObj(w) && (w.status === "live" || w.status === "locked")); }
   function vetoOrder(showAll) {
-    const words = slotHasWord(lang), ranked = lang.meanings.slice().sort((a, b) => a.rank - b.rank);
-    const eligible = ranked.filter(m => { const w = words.get(m.id); return w && (showAll || (w.status === "live" && !w.reviewed)); });
-    const N = Math.max(0, Number(lang.settings.vetoRankedFirst) || 0);
-    const head = eligible.filter(m => m.rank <= N), tail = eligible.filter(m => m.rank > N);
-    tail.sort((a, b) => hash32(vetoSeed + "|" + a.id) - hash32(vetoSeed + "|" + b.id));
+    const slots = new Map(lang.meanings.map(m => [m.id, m]));
+    const eligible = deckWords().filter(w => showAll || (w.status === "live" && !w.reviewed));
+    const N = Math.max(0, Number(lang.settings.vetoRankedFirst) || 0), rank = w => slots.has(w.slot) ? slots.get(w.slot).rank : Infinity;
+    const head = eligible.filter(w => rank(w) <= N).sort((a, b) => rank(a) - rank(b)), tail = eligible.filter(w => !(rank(w) <= N));
+    tail.sort((a, b) => hash32(vetoSeed + "|" + cardKey(a)) - hash32(vetoSeed + "|" + cardKey(b)));
     return head.concat(tail);
   }
   function currentCard() {
     const order = vetoOrder(!!ui.vetoAll);
-    if (!order.length) return { order, m: null };
-    if (!ui.vetoAll) return { order, m: order[0] };
+    if (!order.length) return { order, w: null };
+    if (!ui.vetoAll) return { order, w: order[0] };
     const k = Math.max(0, ui.vetoIdx || 0);
-    if (k >= order.length) return { order, m: null, k, done: true }; // went past the last card: the deck is finished
-    return { order, m: order[k], k };
+    if (k >= order.length) return { order, w: null, k, done: true }; // went past the last card: the deck is finished
+    return { order, w: order[k], k };
   }
   function renderVeto(i) {
-    const head = stageHead(i, "One word at a time. <b>Keep</b> it, <b>Veto</b> it (a new word for the same meaning appears right away), or <b>Lock</b> it so nothing changes it. Each choice also teaches the generator a little about your taste.");
-    const words = slotHasWord(lang);
-    if (!words.size) return `${head}<div class="warnline">No words with meanings yet. <button class="linkbtn" data-act="go" data-stage="generate">Go to Generate</button></div>${stageNav(i)}`;
-    const all = [...words.values()], reviewed = all.filter(w => w.reviewed || w.status === "locked").length;
-    const { order, m, k } = currentCard();
+    const head = stageHead(i, "One word at a time, with or without a meaning. <b>Keep</b> it, <b>Veto</b> it (a new word takes its place right away), or <b>Lock</b> it so nothing changes it. Each choice also teaches the generator a little about your taste.");
+    const all = deckWords();
+    if (!all.length) return `${head}<div class="warnline">No words yet. <button class="linkbtn" data-act="go" data-stage="generate">Go to Generate</button></div>${stageNav(i)}`;
+    const reviewed = all.filter(w => w.reviewed || w.status === "locked").length;
+    const { order, w, k } = currentCard();
     let h = `${head}<div class="toolbar"><span class="muted small">${reviewed} of ${all.length} reviewed</span><span class="spacer"></span>
       <label class="tick" style="margin:0"><input type="checkbox" id="vAll" ${ui.vetoAll ? "checked" : ""}> Include reviewed</label></div>`;
     const undoBtn = `<button class="btn" data-act="vundo" ${vetoUndo.length ? "" : "disabled"}>↶ Undo</button>`;
-    if (!m) {
+    if (!w) {
       h += ui.vetoAll
         ? `<div class="okline">You've been through all ${order.length} words.</div><div class="toolbar" style="justify-content:center;margin-top:8px"><button class="btn primary" data-act="vrestart">Start again from the top</button>${undoBtn}</div>`
         : `<div class="okline">Every word has been reviewed. Tick "Include reviewed" to go through them again.</div><div class="toolbar" style="justify-content:center;margin-top:8px">${undoBtn}</div>`;
     } else {
-      const w = words.get(m.id), twins = nearTwinsOf(lang, w), slots = new Map(lang.meanings.map(x => [x.id, x]));
+      const twins = nearTwinsOf(lang, w), slots = new Map(lang.meanings.map(x => [x.id, x])), m = slots.get(w.slot);
       h += `<div class="vcard${w.status === "locked" ? " locked" : ""}">
-        <div class="vmeta"><span class="muted">#${m.rank}</span> · <b>${esc(m.gloss)}</b> <span class="poschip">${esc(posLabel(m.pos))}</span>${w.status === "locked" ? ' <span class="badge">🔒 locked</span>' : w.reviewed ? ' <span class="badge">kept</span>' : ""}</div>
+        <div class="vmeta">${m ? `<span class="muted">#${m.rank}</span> · <b>${esc(m.gloss)}</b> <span class="poschip">${esc(posLabel(m.pos))}</span>` : '<span class="muted">No meaning yet</span>'}${w.status === "locked" ? ' <span class="badge">🔒 locked</span>' : w.reviewed ? ' <span class="badge">kept</span>' : ""}</div>
         <button class="plain vword" data-act="trace" data-proto="${esc(w.proto)}">${esc(spellProto(lang, w.proto))}</button>
         <div class="vipa ipa">/${esc(w.surface)}/${w.surface !== w.proto ? ` <span class="muted small">from ${esc(w.proto)}</span>` : ""}</div>
         ${twins.length ? `<div class="warn-text" style="margin-top:8px">Near-twin of ${twins.slice(0, 4).map(t => `<b>${esc(spellProto(lang, t.proto))}</b> (${esc(slots.get(t.slot) ? slots.get(t.slot).gloss : "no meaning")})`).join(", ")}${twins.length > 4 ? ` and ${twins.length - 4} more` : ""}</div>` : ""}
@@ -2675,8 +2713,8 @@ if (typeof document !== "undefined") (function () {
   }
   function vetoSnapshot() { vetoUndo.push({ lexicon: clone(lang.lexicon), comfort: clone(lang.comfort), idx: ui.vetoIdx || 0 }); if (vetoUndo.length > 30) vetoUndo.shift(); }
   function vetoAct(kind, confirmed) {
-    const { m } = currentCard(); if (!m) return;
-    const w = slotHasWord(lang).get(m.id); if (!w) return;
+    const { w } = currentCard(); if (!w) return;
+    const m = lang.meanings.find(x => x.id === w.slot), name = m ? `"${m.gloss}"` : "this card";
     ui.vetoNote = "";
     if (kind === "keep") {
       vetoSnapshot();
@@ -2688,7 +2726,7 @@ if (typeof document !== "undefined") (function () {
       else { if (!w.reviewed) learnFrom(lang, w, 1, 1 / 3); w.status = "locked"; w.reviewed = true; if (ui.vetoAll) ui.vetoIdx = (ui.vetoIdx || 0) + 1; }
     } else if (kind === "veto") {
       if (w.status === "locked" && !confirmed) {
-        openSheet(`<h2>Veto a locked word?</h2><p style="margin:0"><b>${esc(spellProto(lang, w.proto))}</b> (${esc(m.gloss)}) is locked. Vetoing it replaces it with a new word.</p>
+        openSheet(`<h2>Veto a locked word?</h2><p style="margin:0"><b>${esc(spellProto(lang, w.proto))}</b>${m ? ` (${esc(m.gloss)})` : ""} is locked. Vetoing it replaces it with a new word.</p>
           <div class="actions"><button class="btn" data-x="cancel">Keep it</button><button class="btn danger" data-x="go">Veto anyway</button></div>`, ev => {
           const x = ev.target.closest("[data-x]"); if (!x) return; closeSheet(); if (x.dataset.x === "go") vetoAct("veto", true);
         });
@@ -2697,9 +2735,9 @@ if (typeof document !== "undefined") (function () {
       vetoSnapshot();
       learnFrom(lang, w, -1, 1 / 3);
       w.status = "vetoed";
-      const r = replacementFor(lang, m.id, segmentWord(w.surface, envWith(langEnv(lang), [...langEnv(lang).symbols, ...CAT.keys()])).length, (Math.random() * 4294967296) >>> 0);
-      if (r.error) ui.vetoNote = `${r.error} "${m.gloss}" has no word for now.`;
-      else lang.lexicon.push({ id: nextWordId(lang), proto: r.w.proto, surface: r.surface, slot: m.id, status: "live", reviewed: false, source: "generated" });
+      const r = replacementFor(lang, w.slot, segmentWord(w.surface, envWith(langEnv(lang), [...langEnv(lang).symbols, ...CAT.keys()])).length, (Math.random() * 4294967296) >>> 0);
+      if (r.error) ui.vetoNote = `${r.error} ${m ? `${name} has no word for now.` : "No replacement was made."}`;
+      else { const id = nextWordId(lang); cardKeys.set(id, cardKey(w)); lang.lexicon.push({ id, proto: r.w.proto, surface: r.surface, slot: w.slot || null, status: "live", reviewed: false, source: "generated" }); }
     }
     changed(true); render();
   }
@@ -2715,17 +2753,19 @@ if (typeof document !== "undefined") (function () {
     const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
   }
-  function openMeaningSheet() {
+  // mode "out": export only; "in": upload only; none (menu): both.
+  function openMeaningSheet(mode) {
     const text = meaningSheetText(lang), rows = text.split("\n").filter(l => /^w\d+ \|/.test(l)).length;
-    openSheet(`<h2>Meaning sheet</h2>
-      <p class="muted small" style="margin:0 0 6px">A plain list of your ${rows} words for an AI chat (or you) to fill in meanings. Uploading it back changes meanings only.</p>
+    const out = mode !== "in", inn = mode !== "out";
+    openSheet(`<h2>${mode === "out" ? "Export word list" : mode === "in" ? "Upload meanings" : "Meaning sheet"}</h2>
+      ${out ? `<p class="muted small" style="margin:0 0 6px">Your ${rows} words, shortest first, for an AI chat (or you) to fill in part of speech and meaning. Uploading it back changes only meanings and parts of speech.</p>
       <textarea id="msOut" readonly rows="7" class="sheettext">${esc(text)}</textarea>
-      <div class="toolbar"><button class="btn" data-x="copy">Copy</button><button class="btn" data-x="dl">Download .txt</button></div>
-      <h3>Bring meanings back</h3>
-      <textarea id="msIn" rows="5" class="sheettext" placeholder="Paste the filled-in sheet here"></textarea>
+      <div class="toolbar"><button class="btn" data-x="copy">Copy</button><button class="btn" data-x="dl">Download .txt</button></div>` : ""}
+      ${inn ? `${out ? "<h3>Bring meanings back</h3>" : `<p class="muted small" style="margin:0 0 6px">Paste the filled-in word list or choose its file, then Check to see what would change.</p>`}
+      <textarea id="msIn" rows="${out ? 5 : 9}" class="sheettext" placeholder="Paste the filled-in word list here"></textarea>
       <div class="toolbar"><button class="btn" data-x="file">Or choose a file</button><button class="btn primary" data-x="check">Check</button></div>
       <input type="file" id="msFile" accept=".txt,text/plain" hidden>
-      <div id="msRes"></div>
+      <div id="msRes"></div>` : ""}
       <div class="actions"><button class="btn" data-x="close">Close</button></div>`, ev => {
       const x = ev.target.closest("[data-x]"); if (!x) return;
       const a = x.dataset.x;
@@ -2742,6 +2782,7 @@ if (typeof document !== "undefined") (function () {
         const { next, st } = mergeMeaningSheet(lang, $("msIn").value);
         const lines = [];
         if (st.set) lines.push(`${st.set} word${st.set === 1 ? "" : "s"} get${st.set === 1 ? "s" : ""} a new meaning${st.created ? ` (${st.created} new meaning${st.created === 1 ? "" : "s"} added to the list)` : ""}.`);
+        if (st.newPos.length) lines.push(`New part${st.newPos.length === 1 ? "" : "s"} of speech added: ${st.newPos.join(", ")}.`);
         if (st.unchanged) lines.push(`${st.unchanged} unchanged.`);
         if (st.blank) lines.push(`${st.blank} blank, left as they are.`);
         if (st.displaced.length) lines.push(`${st.displaced.length} other word${st.displaced.length === 1 ? " loses its" : "s lose their"} meaning (it went to another word): ${st.displaced.slice(0, 8).join(", ")}.`);
@@ -2755,7 +2796,7 @@ if (typeof document !== "undefined") (function () {
       }
       if (a === "apply" && openMeaningSheet.pending) { lang = openMeaningSheet.pending; openMeaningSheet.pending = null; renumberMeanings(lang); changed(); closeSheet(); render(); toast("Meanings updated"); }
     });
-    $("msFile").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) f.text().then(t => { $("msIn").value = t; }); });
+    if ($("msFile")) $("msFile").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) f.text().then(t => { $("msIn").value = t; }); });
   }
   function openSettings() {
     const S = lang.settings;
@@ -2789,7 +2830,7 @@ if (typeof document !== "undefined") (function () {
   function shapeInfo(src) {
     const pp = parseShapePattern(src, shapeEnv(lang));
     if (pp.error) return `<span class="blk err-text">${esc(pp.error)}</span>`;
-    const t = x => x.t === "gap" ? "anything" : x.t === "class" ? `any ${x.L}` : x.s;
+    const t = x => x.t === "gap" ? "anything" : x.t === "class" ? `any ${x.L}${x.suf ? " + " + x.suf : ""}` : x.s;
     const body = pp.toks.map(t).join(", then ");
     const where = pp.start && pp.end ? "a whole word that is exactly" : pp.start ? "a word starting with" : pp.end ? "a word ending in" : "a word containing";
     const ever = everSounds(), absent = pp.toks.filter(x => x.t === "sound" && !ever.has(x.s)).map(x => x.s);
@@ -2811,9 +2852,10 @@ if (typeof document !== "undefined") (function () {
     let summary = "";
     if (st.error) summary = `<div class="warnline">${esc(st.error)} The numbers appear once words can be made.</div>`;
     else {
-      const passing = st.space * st.pass, nm = lang.meanings.length;
-      const tooFew = nm && passing < nm, tight = nm && !tooFew && passing < nm * 3;
-      summary = `<div class="${st.pass === 0 || tooFew ? "errline" : st.pass < 0.1 || tight ? "warnline" : "okline"}">All rules together reject ${pctTxt(1 - st.pass)} of candidate roots. About ${bigNum(passing)} possible roots pass${st.pass === 0 ? ", so nothing can be generated" : ""}.${tooFew ? ` That's fewer than your ${nm} meanings: generation can't give every meaning a word.` : tight ? ` That's under 3× your ${nm} meanings, so generation will be slow and words will crowd together.` : ""}</div>
+      // Room check against the words you'd have after the next Generate (your live and locked words plus one batch).
+      const passing = st.space * st.pass, nm = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed").length + GENERATE_BATCH;
+      const tooFew = passing < nm, tight = !tooFew && passing < nm * 3;
+      summary = `<div class="${st.pass === 0 || tooFew ? "errline" : st.pass < 0.1 || tight ? "warnline" : "okline"}">All rules together reject ${pctTxt(1 - st.pass)} of candidate roots. About ${bigNum(passing)} possible roots pass${st.pass === 0 ? ", so nothing can be generated" : ""}.${tooFew ? ` That's fewer than the ${nm} words you'd have after the next Generate, so it can't make them all.` : tight ? ` That's under 3× the ${nm} words you'd have after the next Generate, so generation will be slow and words will crowd together.` : ""}</div>
         <p class="muted small">Estimated from ${st.n.toLocaleString("en-US")} generated candidates.${lang.meanings.length ? "" : " Once you have a meaning list, this also checks there are enough roots for it."}</p>
         ${st.examples.length ? `<h3>Examples it throws out</h3><div class="twlist">${st.examples.map(e => `<button class="rowcard tw" data-act="trace" data-proto="${esc(e.proto)}"><span class="ipa">${esc(e.proto)}</span>${e.modern !== e.proto ? ` <span class="muted">→</span> <span class="ipa">${esc(e.modern)}</span>` : ""} <span class="muted small" style="margin-left:auto">rule ${e.rule + 1}</span></button>`).join("")}</div>` : ""}`;
     }
@@ -2878,7 +2920,7 @@ if (typeof document !== "undefined") (function () {
   function ruleInfo(src) {
     const r = parseRule(src, spellEnv(lang));
     if (r.error) return `<span class="blk err-text">${esc(r.error)}</span>`;
-    const t = x => x.t === "#" ? "word edge" : x.t === "class" ? `any ${x.L}` : x.s;
+    const t = x => x.t === "#" ? "word edge" : x.t === "class" ? `any ${x.L}${x.suf ? " + " + x.suf : ""}` : x.s;
     const where = [r.left.length ? `after ${r.left.map(t).join(" ")}` : "", r.right.length ? `before ${r.right.map(t).join(" ")}` : ""].filter(Boolean).join(", ").replace(/^after word edge$/, "at the start of the word").replace(/^before word edge$/, "at the end of the word").replace("after word edge", "at the word start").replace("before word edge", "at the word end");
     return `<span class="blk muted small"><span class="ipa">${esc(r.target.map(x => x.s).join(""))}</span> is ${r.repl ? `written <b>${esc(r.repl)}</b>` : "<b>silent</b> (written as nothing)"} ${where ? esc(where) : "everywhere"}.</span>`;
   }
@@ -3182,9 +3224,12 @@ if (typeof document !== "undefined") (function () {
     else if (act === "calib") openCalibration();
     else if (act === "unlearnall") { lang.comfort.learned = {}; changed(); render(); toast("Learned values reset"); }
     else if (act === "gen") doGenerate();
+    else if (act === "allw") { ui.allWords = !ui.allWords; render(); }
+    else if (act === "sheetout") openMeaningSheet("out");
+    else if (act === "sheetin") openMeaningSheet("in");
     else if (act === "regen") {
-      const live = lang.lexicon.filter(w => isObj(w) && w.status === "live"), kept = live.filter(w => w.reviewed).length;
-      openSheet(`<h2>Regenerate unlocked words?</h2><p style="margin:0">This replaces ${live.length} unlocked word${live.length === 1 ? "" : "s"}${kept ? `, including ${kept} you marked Keep` : ""}. Locked and vetoed words stay (vetoed forms never come back).</p>
+      const live = lang.lexicon.filter(w => isObj(w) && w.status === "live"), kept = live.filter(w => w.reviewed).length, meant = live.filter(w => w.slot).length;
+      openSheet(`<h2>Regenerate unlocked words?</h2><p style="margin:0">This removes ${live.length} unlocked word${live.length === 1 ? "" : "s"}${kept || meant ? ` (${[meant ? `${meant} with a meaning` : "", kept ? `${kept} you marked Keep` : ""].filter(Boolean).join(", ")})` : ""} and makes ${GENERATE_BATCH} new words without meanings. Locked and vetoed words stay (vetoed forms never come back).</p>
         <div class="actions"><button class="btn" data-x="cancel">Cancel</button><button class="btn primary" data-x="go">Regenerate</button></div>`, ev => {
         const x = ev.target.closest("[data-x]"); if (!x) return; closeSheet();
         if (x.dataset.x === "go") doRegenerate();
