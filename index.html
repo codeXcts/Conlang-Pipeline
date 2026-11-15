@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-14-2329">
+<meta name="build" content="build 2026-11-15-0021">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,11 +247,11 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-14-2329 (made on build 2026-11-14-2244)
+   Conlang Pipeline — build 2026-11-15-0021 (made on build 2026-11-15-0012)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-14-2329";
-const BASE_BUILD = "build 2026-11-14-2244";
+const BUILD = "build 2026-11-15-0021";
+const BASE_BUILD = "build 2026-11-15-0012";
 const FORMAT = "conlang-pipeline";
 const VERSION = 6;
 const STORE_KEY = "conlang-pipeline:autosave";
@@ -1785,33 +1785,65 @@ function rebuildRoot(lang, said, spelled) {
   };
   return go(0, 0);
 }
-function parseLoans(lang, text) {
+function parseLoans(lang, text, opts) {
+  const exclude = (opts && opts.exclude) || new Set();
   const next = clone(lang), rows = [], env = langEnv(next), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]);
   const known = new Set([...Object.keys(next.sounds.consonants), ...Object.keys(next.sounds.vowels)]);
   const byLabel = {}; for (const [id, p] of Object.entries(next.partsOfSpeech)) { byLabel[String(p.label).toLowerCase()] = id; byLabel[id] = id; }
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("#"));
-  for (const line of lines) {
-    const row = { line, flags: [] }; rows.push(row);
+  // Work out each word's form once, not once per line (with homophones on, a form needs a full evolve; build 2026-11-15-0012).
+  const g = buildGenerator(next), forms = new Map(), protos = new Map(), vetoedProtos = new Set();
+  for (const w of next.lexicon) {
+    if (!isObj(w)) continue;
+    if (w.status === "vetoed") { vetoedProtos.add(w.proto); continue; }
+    if (!protos.has(w.proto)) protos.set(w.proto, w);
+    const k = formKey(next, w.proto, w.surface); if (!forms.has(k)) forms.set(k, w);
+  }
+  lines.forEach((line, li) => {
+    const row = { line, flags: [], index: li }; rows.push(row);
     const p = parseLoanLine(line);
-    if (p.error) { row.skip = p.error; continue; }
+    if (p.error) { row.skip = p.error; return; }
     const said = segmentWord(p.ipa, segEnv).filter(x => !silentSet(next).has(x));
     const odd = [...new Set(said.filter(x => !known.has(x)))];
     if (odd.length) row.flags.push(`uses sounds your language doesn't have: ${odd.join(" ")}`);
     let root = rebuildRoot(next, said, p.spelled);
     if (!root) { root = said; row.flags.push(`the spelling "${p.spelled}" doesn't match /${p.ipa}/ with your spellings; stored from the IPA (written ${spellSegs(next, said)})`); }
     const proto = root.join("");
-    const dup = next.lexicon.find(w => isObj(w) && w.proto === proto && w.status !== "vetoed");
-    if (dup) { row.skip = `already in your lexicon as ${dup.id}`; continue; }
-    const id = nextWordId(next), entry = { id, proto, surface: soundedOnly(next, root).join(""), slot: null, status: "locked", reviewed: false, source: "loan" };
-    next.lexicon.push(entry);
+    // Same written form as a word already there (Chilly, 2026-11-15):
+    //  - the same loan again (same meaning, or none given): skipped, it's already in;
+    //  - another loan or a locked word: both kept, this one needs approval (e.g. French "me" = but / May);
+    //  - an unlocked generated word: the loan replaces it.
+    const dup = protos.get(proto), glossOf = w => { const m = w && w.slot && next.meanings.find(x => x.id === w.slot); return m ? m.gloss : ""; };
+    let replaced = null;
+    if (dup) {
+      const dg = glossOf(dup);
+      if (dup.source === "loan" && (!p.gloss || dg.toLowerCase() === p.gloss.toLowerCase())) { row.skip = `already added as ${dup.id}`; return; }
+      if (dup.status === "live") replaced = dup;
+      else {
+        row.approve = true;
+        if (exclude.has(li)) { row.skip = "not approved"; return; }
+        row.flags.push(`same form as ${dup.source === "loan" ? "the loan" : "your locked word"} ${spellProto(next, dup.proto)} (${dup.id}${dg ? `, "${dg}"` : ""}); kept as a separate word`);
+      }
+    }
+    const id = nextWordId(next); // before any removal, so a removed word's id is never reused
+    if (replaced) {
+      next.lexicon.splice(next.lexicon.indexOf(replaced), 1);
+      for (const [k, w] of forms) if (w === replaced) forms.delete(k);
+      const rg = glossOf(replaced);
+      row.flags.push(`replaces the generated word ${replaced.id}${rg ? (p.gloss ? ` (its meaning "${rg}" is left without a word)` : ` (the loan takes its meaning "${rg}")`) : ""}`);
+    }
+    const entry = { id, proto, surface: soundedOnly(next, root).join(""), slot: null, status: "locked", reviewed: false, source: "loan" };
+    next.lexicon.push(entry); protos.set(proto, entry);
+    if (replaced && replaced.slot && !p.gloss) entry.slot = replaced.slot;
     const written = spellProto(next, proto);
     if (written !== p.spelled) row.flags.push(`your spelling rules write it ${written}`);
-    if (!syllableShapes(next, proto).length) row.flags.push("doesn't fit your syllable patterns");
+    if (!syllableShapes(next, proto, g).length) row.flags.push("doesn't fit your syllable patterns");
     const sr = shapeReject(next, proto, null);
     if (sr >= 0) row.flags.push(`breaks shape rule ${sr + 1} (${next.shapes[sr].settings.reject})`);
-    const key = formKey(next, proto, entry.surface), same = next.lexicon.find(w => isObj(w) && w !== entry && w.status !== "vetoed" && formKey(next, w.proto, w.surface) === key);
-    if (same) row.flags.push(`sounds the same as ${spellProto(next, same.proto)} (${same.id})`);
-    if (next.lexicon.some(w => isObj(w) && w.status === "vetoed" && w.proto === proto)) row.flags.push("you vetoed this form before");
+    const key = formKey(next, proto, entry.surface), same = forms.get(key);
+    if (!same) forms.set(key, entry);
+    if (same && !row.approve) row.flags.push(`sounds the same as ${spellProto(next, same.proto)} (${same.id})`);
+    if (vetoedProtos.has(proto)) row.flags.push("you vetoed this form before");
     // part of speech and meaning, as the meaning sheet does it
     let pos = "";
     if (p.pos) { pos = byLabel[p.pos.toLowerCase()]; if (!pos) { pos = posSlug(p.pos); while (next.partsOfSpeech[pos]) pos += "-2"; next.partsOfSpeech[pos] = { label: p.pos, note: "" }; byLabel[p.pos.toLowerCase()] = pos; byLabel[pos] = pos; row.flags.push(`new part of speech: ${p.pos}`); } }
@@ -1826,7 +1858,7 @@ function parseLoans(lang, text) {
       }
     }
     row.entry = entry; row.written = written;
-  }
+  });
   return { next, rows, added: rows.filter(r => r.entry).length };
 }
 // Regeneration keeps vetoed and locked entries and redoes only the rest.
@@ -2721,7 +2753,7 @@ if (typeof document !== "undefined") (function () {
   }
   // Loans in: a whole list at once, or one word with its own fields. Check shows every line and its flags; Add applies.
   function openLoans() {
-    let mode = "list", pending = null;
+    let mode = "list", pending = null, pendingText = "";
     const posOpts = Object.entries(lang.partsOfSpeech).map(([id, p]) => `<option value="${esc(p.label)}">`).join("");
     openSheet(`<h2>Add loanwords</h2>
       <div class="seg" role="group" aria-label="How"><button data-x="mlist" class="on">A list</button><button data-x="mone">One word</button></div>
@@ -2758,17 +2790,20 @@ if (typeof document !== "undefined") (function () {
           if (!sp || !ipa) { $("lnRes").innerHTML = '<p class="err-text">Type the spelling and the IPA.</p>'; return; }
           text = `${sp} /${ipa}/ | ${$("lnPos").value.trim()} | ${$("lnGl").value.trim()}`;
         }
-        const r = parseLoans(lang, text); pending = r;
-        const ok = r.rows.filter(w => w.entry), skipped = r.rows.filter(w => !w.entry), flagged = ok.filter(w => w.flags.length);
+        const r = parseLoans(lang, text); pending = r; pendingText = text;
+        const ok = r.rows.filter(w => w.entry), skipped = r.rows.filter(w => !w.entry), flagged = ok.filter(w => w.flags.length), approve = ok.filter(w => w.approve);
         $("lnRes").innerHTML = !r.rows.length ? '<p class="err-text">Nothing to add.</p>' : `
-          <p class="${ok.length ? "okline" : "warnline"}" style="margin:8px 0">${ok.length} loan${ok.length === 1 ? "" : "s"} ready${flagged.length ? `, ${flagged.length} with flags (added anyway)` : ""}${skipped.length ? `; ${skipped.length} skipped` : ""}.</p>
+          <p class="${ok.length ? "okline" : "warnline"}" style="margin:8px 0">${ok.length} loan${ok.length === 1 ? "" : "s"} ready${flagged.length ? `, ${flagged.length} with flags (added anyway)` : ""}${skipped.length ? `; ${skipped.length} skipped` : ""}.${approve.length ? ` ${approve.length} share a form with another word: untick any you don't want.` : ""}</p>
           <ul class="list">${r.rows.map(w => w.entry
-            ? `<li><b>${esc(w.written)}</b> <span class="muted small ipa">/${esc(w.entry.surface)}/</span>${w.flags.length ? `<br><span class="warn-text small">${w.flags.map(esc).join("; ")}</span>` : ""}</li>`
+            ? `<li>${w.approve ? `<label class="small"><input type="checkbox" class="lnOk" data-i="${w.index}" checked> Keep</label> ` : ""}<b>${esc(w.written)}</b> <span class="muted small ipa">/${esc(w.entry.surface)}/</span>${w.flags.length ? `<br><span class="warn-text small">${w.flags.map(esc).join("; ")}</span>` : ""}</li>`
             : `<li class="muted"><s>${esc(w.line)}</s><br><span class="err-text small">${esc(w.skip)}</span></li>`).join("")}</ul>`;
         $("sheet").querySelector('[data-x="add"]').disabled = !ok.length;
         return;
       }
       if (k === "add" && pending && pending.added) {
+        const exclude = new Set([...$("lnRes").querySelectorAll(".lnOk")].filter(b => !b.checked).map(b => Number(b.dataset.i)));
+        if (exclude.size) pending = parseLoans(lang, pendingText, { exclude });
+        if (!pending.added) { closeSheet(); toast("Nothing added"); return; }
         lang = pending.next; closeSheet(); changed(); render(); toast(`Added ${pending.added} loan${pending.added === 1 ? "" : "s"}`);
       }
     });
