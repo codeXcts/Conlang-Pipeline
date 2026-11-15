@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-14-2120">
+<meta name="build" content="build 2026-11-14-2244">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,11 +247,11 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-14-2120 (made on build 2026-11-14-2113)
+   Conlang Pipeline — build 2026-11-14-2244 (made on build 2026-11-14-2120)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-14-2120";
-const BASE_BUILD = "build 2026-11-14-2113";
+const BUILD = "build 2026-11-14-2244";
+const BASE_BUILD = "build 2026-11-14-2120";
 const FORMAT = "conlang-pipeline";
 const VERSION = 5;
 const STORE_KEY = "conlang-pipeline:autosave";
@@ -854,7 +854,7 @@ const NOTHING = new Set(["∅", "0"]);
 function hash32(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
 function envWith(base, symbols) {
   const set = new Set(symbols);
-  return { symbols: set, sorted: [...set].sort((a, b) => b.length - a.length), classes: base.classes };
+  return { symbols: set, sorted: [...set].sort((a, b) => b.length - a.length), classes: base.classes, silent: base.silent || new Set() };
 }
 // Proto inventory + classes. extra: more symbols to recognise (e.g. sounds made by sound changes).
 /* Silent letters (Chilly, 2026-11-14; format 4): letters with no sound, kept in sounds.silent. They are part of the
@@ -866,7 +866,7 @@ function langEnv(lang, extra) {
   const base = [...Object.keys(lang.sounds.consonants), ...Object.keys(lang.sounds.vowels), ...Object.keys(lang.sounds.silent || {})];
   const classes = {};
   for (const [L, c] of Object.entries(lang.syllables.classes)) if (isObj(c) && Array.isArray(c.members)) classes[L] = c.members;
-  return envWith({ classes }, base.concat(extra || []));
+  return envWith({ classes, silent: silentSet(lang) }, base.concat(extra || []));
 }
 // Split a word into sounds by longest match.
 function segmentWord(word, env) {
@@ -995,28 +995,47 @@ function ruleMatchAt(r, segs, i, env) {
   for (let k = 0; k < n; k++) if (!tokMatch(r.target[k], segs[i + k], env)) return 0;
   return ctxOk(r, segs, i, i + n, env) ? n : 0;
 }
+/* Silent letters are invisible to rules (Chilly, 2026-11-14): a sound-change rule or shape rule skips them, unless the
+   rule names a silent letter itself, directly or through a class that holds one. */
+function mentionsSilent(toks, env) {
+  const sil = env.silent; if (!sil || !sil.size) return false;
+  return toks.some(t => t && ((t.t === "sound" && sil.has(t.s)) || (t.t === "class" && (env.classes[t.L] || []).some(m => sil.has(m)))));
+}
 // One sound change on one word, all matches at once (context read from the input), left to right.
-function applyChange(pr, segs, env) {
-  const out = []; let matched = false;
+// Returns the word as pieces: each input span [a, b) and what it became (a === b for an insertion).
+function changePieces(pr, segs, env) {
+  const pieces = []; let matched = false;
   if (pr.insert) {
     for (let g = 0; g <= segs.length; g++) {
-      if (ctxOk(pr, segs, g, g, env)) { for (const t of pr.repl) out.push(t.s); matched = true; }
-      if (g < segs.length) out.push(segs[g]);
+      if (ctxOk(pr, segs, g, g, env)) { pieces.push({ a: g, b: g, out: pr.repl.map(t => t.s) }); matched = true; }
+      if (g < segs.length) pieces.push({ a: g, b: g + 1, out: [segs[g]] });
     }
-    return { out, matched };
+    return { pieces, matched };
   }
   let i = 0;
   while (i < segs.length) {
     const n = ruleMatchAt(pr, segs, i, env);
-    if (!n) { out.push(segs[i]); i++; continue; }
+    if (!n) { pieces.push({ a: i, b: i + 1, out: [segs[i]] }); i++; continue; }
     matched = true;
-    pr.repl.forEach((t, k) => {
-      if (t.t === "sound") out.push(t.s);
-      else out.push(mapClass(pr.target[k], t, segs[i + k], env));
-    });
+    pieces.push({ a: i, b: i + n, out: pr.repl.map((t, k) => t.t === "sound" ? t.s : mapClass(pr.target[k], t, segs[i + k], env)) });
     i += n;
   }
-  return { out, matched };
+  return { pieces, matched };
+}
+function applyChange(pr, segs, env) {
+  const sil = env.silent;
+  if (pr.seesSilent === undefined) pr.seesSilent = mentionsSilent([...pr.target, ...pr.repl, ...pr.left, ...pr.right], env);
+  if (!pr.seesSilent && sil && sil.size && segs.some(x => sil.has(x))) {
+    // Run the rule on the sounds only. Each silent letter rides with the sound before it (leading ones stay first);
+    // when that sound changes it follows what the sound became, and when the sound is lost it stays where it was.
+    const lead = [], items = [];
+    for (const x of segs) { if (sil.has(x)) (items.length ? items[items.length - 1].after : lead).push(x); else items.push({ s: x, after: [] }); }
+    const r = changePieces(pr, items.map(x => x.s), env), out = lead.slice();
+    for (const pc of r.pieces) { out.push(...pc.out); for (let k = pc.a; k < pc.b; k++) out.push(...items[k].after); }
+    return { out, matched: r.matched };
+  }
+  const r = changePieces(pr, segs, env);
+  return { out: r.pieces.flatMap(pc => pc.out), matched: r.matched };
 }
 // Parsed rules per era plus the sound inventory after each era (worked out from the rules:
 // a sound is added when a rule can produce it, and lost only when a rule changes it everywhere, 100%).
@@ -1759,9 +1778,10 @@ function parseShapePattern(src, env) {
   if (toks.some((t, k) => t.t === "#" && k !== 0 && k !== toks.length - 1)) return { error: "# only goes at the very start or end of the pattern." };
   if (!toks.some(t => t.t === "sound" || t.t === "class")) return { error: "The pattern needs at least one sound or class." };
   const start = toks[0].t === "#", end = toks.length > 1 && toks[toks.length - 1].t === "#";
-  return { toks: toks.filter(t => t.t !== "#"), start, end };
+  return { toks: toks.filter(t => t.t !== "#"), start, end, seesSilent: mentionsSilent(toks, env) };
 }
 function patternMatches(pp, segs, env) {
+  if (!pp.seesSilent && env.silent && env.silent.size) segs = segs.filter(x => !env.silent.has(x)); // silent letters are invisible unless named
   const T = pp.toks;
   const m = (ti, si) => {
     if (ti === T.length) return !pp.end || si === segs.length;
@@ -1773,7 +1793,7 @@ function patternMatches(pp, segs, env) {
   for (let i = 0; i <= segs.length; i++) if (m(0, i)) return true;
   return false;
 }
-function shapeEnv(lang) { const ei = eraInventories(lang); return envWith(langEnv(lang), [...ei.proto, ...ei.eras.flatMap(e => e.inventory), ...CAT.keys()]); }
+function shapeEnv(lang) { const ei = eraInventories(lang), base = langEnv(lang); return envWith(base, [...base.symbols, ...ei.proto, ...ei.eras.flatMap(e => e.inventory), ...CAT.keys()]); } // base.symbols: silent letters too
 let _shapeMemo = { key: null, val: null };
 function parsedShapes(lang) {
   const key = JSON.stringify([lang.shapes, lang.sounds, lang.syllables.classes, lang.proto]);
@@ -1859,6 +1879,14 @@ if (typeof document !== "undefined") (function () {
   const $ = id => document.getElementById(id);
   let storageOK = true, lang, meta = { lastExport: null, dirtySince: null }, ui = { soundView: "groups", stage: "sounds", showPositions: false };
   let startupNote = null, reminderDismissed = false, saveTimer = null;
+  // Locked words whose saved pronunciation no longer matches the rules (e.g. after a build changes how rules work).
+  // They update like every word; this only makes sure the change is seen.
+  function lockedDrift(L) {
+    let hits = [];
+    try { hits = L.lexicon.filter(w => isObj(w) && w.status === "locked" && typeof w.proto === "string").map(w => [w, deriveSurface(L, w.proto)]).filter(([w, s]) => s !== w.surface); } catch (e) { return ""; }
+    if (!hits.length) return "";
+    return `${hits.length} locked word${hits.length === 1 ? " is" : "s are"} now pronounced differently: ${hits.slice(0, 12).map(([w, s]) => `${w.proto} /${w.surface}/ → /${s}/`).join(", ")}${hits.length > 12 ? ` and ${hits.length - 12} more` : ""}.`;
+  }
 
   function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { storageOK = false; return null; } }
   function storeSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { storageOK = false; return false; } }
@@ -1882,6 +1910,8 @@ if (typeof document !== "undefined") (function () {
       return skeleton();
     }
     if (r.warnings.length) startupNote = { err: false, text: `Autosave loaded with ${r.warnings.length} note(s). Open Menu → Diagnostics for details.` };
+    const drift = lockedDrift(r.data);
+    if (drift) startupNote = { err: false, text: drift + (startupNote ? " " + startupNote.text : "") };
     return r.data;
   }
   lang = loadAutosave();
@@ -2437,7 +2467,7 @@ if (typeof document !== "undefined") (function () {
   }
   function renderChanges(i) {
     const P = lang.proto, inv = eraInventories(lang);
-    const head = stageHead(i, "Ordered rules that turn proto-words into modern words. <code>k > tʃ / _i</code> means k becomes tʃ before i. <code>∅</code> means nothing: <code>e > ∅ / _#</code> drops a final e, <code>∅ > e / #_s</code> adds one. Separate sounds with spaces when needed (<code>t s</code>).");
+    const head = stageHead(i, "Ordered rules that turn proto-words into modern words. <code>k > tʃ / _i</code> means k becomes tʃ before i. <code>∅</code> means nothing: <code>e > ∅ / _#</code> drops a final e, <code>∅ > e / #_s</code> adds one. Separate sounds with spaces when needed (<code>t s</code>). Silent letters are skipped, unless a rule names one (or a class that holds one).");
     if (!inv.proto.length) return `${head}<div class="warnline">Pick some sounds first. <button class="linkbtn" data-act="go" data-stage="sounds">Go to Sounds</button></div>${stageNav(i)}`;
     const ruleRows = (e, ei) => e.changes.map((c, ci) => {
       const r = inv.eras[ei] && inv.eras[ei].rules[ci];
@@ -2914,7 +2944,7 @@ if (typeof document !== "undefined") (function () {
     return `<span class="blk muted small ipa">Rejects ${where}: ${esc(body)}.</span>${absent.length ? `<span class="blk warn-text">Your words never have <span class="ipa">${esc(absent.join(" "))}</span>, so this rule does nothing yet.</span>` : ""}`;
   }
   function renderShapes(i) {
-    const head = stageHead(i, "Rules that throw out roots by their shape, such as “no word starts with ŋ”. A rejected root is never generated. Each rule checks the word at one stage: the proto-form, after an era, or the modern form.");
+    const head = stageHead(i, "Rules that throw out roots by their shape, such as “no word starts with ŋ”. A rejected root is never generated. Each rule checks the word at one stage: the proto-form, after an era, or the modern form. Silent letters are skipped, unless a rule names one (or a class that holds one).");
     if (!eraInventories(lang).proto.length) return `${head}<div class="warnline">Pick some sounds first. <button class="linkbtn" data-act="go" data-stage="sounds">Go to Sounds</button></div>${stageNav(i)}`;
     const st = shapeStats(lang, 1500);
     const ps = parsedShapes(lang), posIds = Object.keys(lang.partsOfSpeech);
@@ -3409,7 +3439,10 @@ if (typeof document !== "undefined") (function () {
         const x = ev.target.closest("[data-x]"); if (!x) return;
         if (x.dataset.x === "export") { exportFile(); return; }
         if (x.dataset.x === "cancel") return closeSheet();
-        lang = r.data; resetSession(); meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet(); render(); toast(`Loaded ${next}`);
+        const drift = lockedDrift(r.data);
+        lang = r.data; resetSession(); meta.dirtySince = null; saveMeta(); autosaveNow(); closeSheet();
+        if (drift) startupNote = { err: false, text: drift };
+        render(); toast(`Loaded ${next}`);
       });
     });
   }
