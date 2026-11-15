@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-14-2244">
+<meta name="build" content="build 2026-11-14-2329">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,13 +247,13 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-14-2244 (made on build 2026-11-14-2120)
+   Conlang Pipeline — build 2026-11-14-2329 (made on build 2026-11-14-2244)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-14-2244";
-const BASE_BUILD = "build 2026-11-14-2120";
+const BUILD = "build 2026-11-14-2329";
+const BASE_BUILD = "build 2026-11-14-2244";
 const FORMAT = "conlang-pipeline";
-const VERSION = 5;
+const VERSION = 6;
 const STORE_KEY = "conlang-pipeline:autosave";
 const META_KEY = "conlang-pipeline:meta";   // { lastExport, dirtySince } — tool state, not language data
 const UI_KEY = "conlang-pipeline:ui";       // { soundView } — tool state, not language data
@@ -328,7 +328,10 @@ const MIGRATIONS = {
     d.settings = Object.assign({ vetoRankedFirst: 200, blockNearTwins: false }, isObj(d.settings) ? d.settings : {});
     if (typeof d.settings.allowHomophones !== "boolean") d.settings.allowHomophones = false;
     return d;
-  }
+  },
+  // 5 → 6 (Chilly, 2026-11-14): lexicon entries may have source "loan". Nothing in the file changes; the bump keeps
+  // older builds (which would run loans through sound changes) from opening it.
+  5: d => d
 };
 
 /* ---------------- Sound catalog (tool data, not language data) ---------------- */
@@ -1082,11 +1085,21 @@ function eraInventories(lang) {
 }
 // Run a proto-form through every era. Patchy rules (< 100%) pick words by a hash of the proto-form and the rule,
 // so the same word always gets the same result.
+/* Loanwords (Chilly, 2026-11-14): lexicon entries with source "loan". They were borrowed as they are now, so sound
+   changes never touch them (their proto-form is their modern written form). Proto-forms are unique in the lexicon,
+   so the proto-form identifies the loan. */
+let _loanMemo = { arr: null, len: -1, set: null };
+function isLoanProto(lang, proto) {
+  const lx = lang.lexicon;
+  if (!Array.isArray(lx)) return false;
+  if (_loanMemo.arr !== lx || _loanMemo.len !== lx.length) _loanMemo = { arr: lx, len: lx.length, set: new Set(lx.filter(w => isObj(w) && w.source === "loan").map(w => w.proto)) };
+  return _loanMemo.set.has(proto);
+}
 function evolve(lang, proto) {
   const base = langEnv(lang);
   let segs = segmentWord(proto, base);
   const stages = { proto: segs.slice() }, trace = [];
-  if (!lang.proto || !lang.proto.enabled) { stages.modern = segs; return { segs, stages, trace }; }
+  if (!lang.proto || !lang.proto.enabled || isLoanProto(lang, proto)) { stages.modern = segs; return { segs, stages, trace, loan: isLoanProto(lang, proto) }; }
   for (const e of eraInventories(lang).eras) {
     for (const { ch, pr, env } of e.rules) {
       if (pr.error) continue;
@@ -1747,6 +1760,75 @@ function removeParts(lang, opts) {
   }
   return before - lang.lexicon.length;
 }
+/* Loans in: one per line, "spelling /ipa/ | part of speech | meaning" (part of speech and meaning optional).
+   The written root is rebuilt from both: the sounds come from the IPA, and silent letters are placed where the
+   spelling needs them. Problems are flagged, never blocking (Chilly, 2026-11-14), except a word already in the lexicon.
+   Loans come in locked. Returns { next, rows } without touching lang. */
+function parseLoanLine(line) {
+  const f = line.split("|").map(x => x.trim());
+  const m = /^(.*?)\s*\/([^/]*)\/\s*$/.exec(f[0] || "");
+  if (!m || !m[1].trim() || !m[2].trim()) return { error: 'Write the word as "spelling /ipa/", e.g. kaçi /kaçi/.' };
+  return { spelled: m[1].trim().normalize("NFC"), ipa: m[2].trim().normalize("NFC").replace(/:/g, "ː"), pos: f.length > 2 ? f[1] : (f[1] || ""), gloss: f.length > 2 ? f.slice(2).join(" | ").trim() : "" };
+}
+// The written root (sounds + silent letters) whose sounds are `said` and whose plain spelling is `spelled`. Null if none.
+function rebuildRoot(lang, said, spelled) {
+  const sp = lang.orthography.spellings || {}, silent = [...silentSet(lang)];
+  const spellOf = x => Object.prototype.hasOwnProperty.call(sp, x) ? sp[x] : x;
+  const memo = new Map();
+  const go = (i, j) => { // sounds said[i..], letters spelled[j..]
+    const key = i + "," + j; if (memo.has(key)) return memo.get(key);
+    let out = null;
+    if (i === said.length && j === spelled.length) out = [];
+    if (!out && i < said.length) { const w = spellOf(said[i]); if (spelled.startsWith(w, j)) { const r = go(i + 1, j + w.length); if (r) out = [said[i]].concat(r); } }
+    if (!out) for (const s of silent) { const w = spellOf(s); if (w && spelled.startsWith(w, j)) { const r = go(i, j + w.length); if (r) { out = [s].concat(r); break; } } }
+    memo.set(key, out); return out;
+  };
+  return go(0, 0);
+}
+function parseLoans(lang, text) {
+  const next = clone(lang), rows = [], env = langEnv(next), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]);
+  const known = new Set([...Object.keys(next.sounds.consonants), ...Object.keys(next.sounds.vowels)]);
+  const byLabel = {}; for (const [id, p] of Object.entries(next.partsOfSpeech)) { byLabel[String(p.label).toLowerCase()] = id; byLabel[id] = id; }
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+  for (const line of lines) {
+    const row = { line, flags: [] }; rows.push(row);
+    const p = parseLoanLine(line);
+    if (p.error) { row.skip = p.error; continue; }
+    const said = segmentWord(p.ipa, segEnv).filter(x => !silentSet(next).has(x));
+    const odd = [...new Set(said.filter(x => !known.has(x)))];
+    if (odd.length) row.flags.push(`uses sounds your language doesn't have: ${odd.join(" ")}`);
+    let root = rebuildRoot(next, said, p.spelled);
+    if (!root) { root = said; row.flags.push(`the spelling "${p.spelled}" doesn't match /${p.ipa}/ with your spellings; stored from the IPA (written ${spellSegs(next, said)})`); }
+    const proto = root.join("");
+    const dup = next.lexicon.find(w => isObj(w) && w.proto === proto && w.status !== "vetoed");
+    if (dup) { row.skip = `already in your lexicon as ${dup.id}`; continue; }
+    const id = nextWordId(next), entry = { id, proto, surface: soundedOnly(next, root).join(""), slot: null, status: "locked", reviewed: false, source: "loan" };
+    next.lexicon.push(entry);
+    const written = spellProto(next, proto);
+    if (written !== p.spelled) row.flags.push(`your spelling rules write it ${written}`);
+    if (!syllableShapes(next, proto).length) row.flags.push("doesn't fit your syllable patterns");
+    const sr = shapeReject(next, proto, null);
+    if (sr >= 0) row.flags.push(`breaks shape rule ${sr + 1} (${next.shapes[sr].settings.reject})`);
+    const key = formKey(next, proto, entry.surface), same = next.lexicon.find(w => isObj(w) && w !== entry && w.status !== "vetoed" && formKey(next, w.proto, w.surface) === key);
+    if (same) row.flags.push(`sounds the same as ${spellProto(next, same.proto)} (${same.id})`);
+    if (next.lexicon.some(w => isObj(w) && w.status === "vetoed" && w.proto === proto)) row.flags.push("you vetoed this form before");
+    // part of speech and meaning, as the meaning sheet does it
+    let pos = "";
+    if (p.pos) { pos = byLabel[p.pos.toLowerCase()]; if (!pos) { pos = posSlug(p.pos); while (next.partsOfSpeech[pos]) pos += "-2"; next.partsOfSpeech[pos] = { label: p.pos, note: "" }; byLabel[p.pos.toLowerCase()] = pos; byLabel[pos] = pos; row.flags.push(`new part of speech: ${p.pos}`); } }
+    if (p.gloss) {
+      if (p.gloss.includes("|")) { row.flags.push("a meaning can't contain |; left without one"); }
+      else {
+        let m = next.meanings.find(x => x.gloss.toLowerCase() === p.gloss.toLowerCase());
+        if (!m) { m = { id: slotId(nextSlotNum(next)), gloss: p.gloss, pos, rank: next.meanings.length + 1 }; next.meanings.push(m); }
+        const holder = next.lexicon.find(w => isObj(w) && w !== entry && w.slot === m.id && w.status !== "vetoed");
+        if (holder) { holder.slot = null; row.flags.push(`"${m.gloss}" was ${spellProto(next, holder.proto)} (${holder.id}); that word now has no meaning`); }
+        entry.slot = m.id;
+      }
+    }
+    row.entry = entry; row.written = written;
+  }
+  return { next, rows, added: rows.filter(r => r.entry).length };
+}
 // Regeneration keeps vetoed and locked entries and redoes only the rest.
 function clearUnlocked(lang) {
   const before = lang.lexicon.length;
@@ -1870,7 +1952,7 @@ function nextWordId(lang) {
 }
 
 /* Expose the core for tests (Node). */
-if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, removeParts, silentSet, soundedOnly, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
+if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, removeParts, silentSet, soundedOnly, parseLoans, rebuildRoot, isLoanProto, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
 
 /* ============================================================
    Interface
@@ -2456,7 +2538,8 @@ if (typeof document !== "undefined") (function () {
     let h = `<p style="margin:0 0 6px"><span class="ipa">/${esc(proto)}/</span> <span class="muted small">proto</span></p>`;
     // Find each step's era by id in the current language (never by object identity).
     const eraOf = e => { const k = lang.proto.eras.findIndex(x => isObj(x) && x.id === e.id); return eraLabel(k >= 0 ? lang.proto.eras[k] : e, k); };
-    if (!lang.proto.enabled) h += `<p class="muted small">This language is on the modern path, so it has no sound changes.</p>`;
+    if (ev.loan) h += `<p class="muted small">A loanword: borrowed as it is now, so sound changes don't apply.</p>`;
+    else if (!lang.proto.enabled) h += `<p class="muted small">This language is on the modern path, so it has no sound changes.</p>`;
     else if (!ev.trace.length) h += `<p class="muted small">No rule touches this word.</p>`;
     else h += `<ol class="trace">${ev.trace.map(t => `<li><span class="muted small">${esc(eraOf(t.era))} · </span><code>${esc(t.rule)}</code><br>${t.skipped ? `<span class="muted small">skipped (patchy rule)</span>` : `<span class="ipa">${esc(t.before)} → <b>${esc(t.after)}</b></span>`}</li>`).join("")}</ol>`;
     h += `<p style="margin:8px 0 0"><span class="ipa">/${esc(ev.segs.join(""))}/</span> <span class="muted small">modern</span> · <b>${esc(spellProto(lang, proto))}</b></p>`;
@@ -2560,7 +2643,7 @@ if (typeof document !== "undefined") (function () {
   const posLabel = id => (lang.partsOfSpeech[id] && lang.partsOfSpeech[id].label) || id || "—";
   function wordForSlotHTML(w) {
     if (!w) return '<span class="muted small">no word yet</span>';
-    return `<b>${esc(spellProto(lang, w.proto))}</b> <span class="muted small ipa">/${esc(w.surface)}/</span>${w.status === "locked" ? ' <span title="Locked">🔒</span>' : ""}`;
+    return `<b>${esc(spellProto(lang, w.proto))}</b> <span class="muted small ipa">/${esc(w.surface)}/</span>${w.source === "loan" ? ' <span class="poschip">loan</span>' : ""}${w.status === "locked" ? ' <span title="Locked">🔒</span>' : ""}`;
   }
   // Live and locked words, shortest modern form first (the order of the exported sheet).
   function wordsShortestFirst() {
@@ -2592,7 +2675,9 @@ if (typeof document !== "undefined") (function () {
     }
     // 3. hand the words to an AI chat and bring the meanings back
     h += `<h2>Give them meanings</h2><p class="ghint">Export the word list (shortest words first) for your lexicon and grammar chats. They fill in part of speech and meaning for the words they use; you upload the result. Only meanings and parts of speech come back, and you see what would change before anything does. Veto first if you want to cut words.</p>
-      <div class="toolbar"><button class="btn primary" data-act="sheetout" ${words.length ? "" : "disabled"}>Export word list</button><button class="btn" data-act="sheetin" ${words.length ? "" : "disabled"}>Upload meanings</button></div>`;
+      <div class="toolbar"><button class="btn primary" data-act="sheetout" ${words.length ? "" : "disabled"}>Export word list</button><button class="btn" data-act="sheetin" ${words.length ? "" : "disabled"}>Upload meanings</button></div>
+      <h2>Loanwords</h2><p class="ghint">Words borrowed from elsewhere, written as <code>spelling /ipa/ | part of speech | meaning</code>. They come in locked, and sound changes never touch them. Anything that breaks your rules is flagged, not refused.</p>
+      <div class="toolbar"><button class="btn" data-act="loans">Add loanwords</button></div>`;
     // 4. meanings
     h += `<h2>Meanings</h2>`;
     if (!M.length) {
@@ -2633,6 +2718,62 @@ if (typeof document !== "undefined") (function () {
       ui.genNotes = null; ui.vetoIdx = 0; closeSheet(); changed(); render();
       toast([n ? `Removed ${n} word${n === 1 ? "" : "s"}` : "", opts.meanings ? "meaning list cleared" : ""].filter(Boolean).join("; "));
     });
+  }
+  // Loans in: a whole list at once, or one word with its own fields. Check shows every line and its flags; Add applies.
+  function openLoans() {
+    let mode = "list", pending = null;
+    const posOpts = Object.entries(lang.partsOfSpeech).map(([id, p]) => `<option value="${esc(p.label)}">`).join("");
+    openSheet(`<h2>Add loanwords</h2>
+      <div class="seg" role="group" aria-label="How"><button data-x="mlist" class="on">A list</button><button data-x="mone">One word</button></div>
+      <div id="lnList">
+        <p class="muted small" style="margin:8px 0 6px">One per line: <code>spelling /ipa/ | part of speech | meaning</code>. Part of speech and meaning are optional. Lines starting with # are skipped.</p>
+        <textarea id="lnIn" rows="8" class="sheettext ipa" placeholder="kaçi /kaçi/ | Noun | coffee"></textarea>
+        <div class="toolbar"><button class="btn" data-x="file">Or choose a file</button></div>
+        <input type="file" id="lnFile" accept=".txt,text/plain" hidden>
+      </div>
+      <div id="lnOne" hidden>
+        <label class="field"><span>Spelling</span><input type="text" id="lnSp" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="field"><span>IPA</span><input type="text" id="lnIpa" class="ipa" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        ${keypadHTML("lnIpa", ["ː", "ʰ", "ʲ", "ʷ"])}
+        <label class="field"><span>Part of speech (optional)</span><input type="text" id="lnPos" list="lnPosL" autocomplete="off"><datalist id="lnPosL">${posOpts}</datalist></label>
+        <label class="field"><span>Meaning (optional)</span><input type="text" id="lnGl" autocomplete="off"></label>
+      </div>
+      <div id="lnRes"></div>
+      <div class="actions"><button class="btn" data-x="cancel">Cancel</button><button class="btn" data-x="check">Check</button><button class="btn primary" data-x="add" disabled>Add</button></div>`, ev => {
+      const x = ev.target.closest("[data-x]"); if (!x) return;
+      const k = x.dataset.x;
+      if (k === "cancel") return closeSheet();
+      if (k === "mlist" || k === "mone") {
+        mode = k === "mlist" ? "list" : "one"; pending = null;
+        $("lnList").hidden = mode !== "list"; $("lnOne").hidden = mode !== "one";
+        x.parentNode.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === x));
+        $("lnRes").innerHTML = ""; $("sheet").querySelector('[data-x="add"]').disabled = true; return;
+      }
+      if (k === "file") return $("lnFile").click();
+      if (k === "check") {
+        let text = "";
+        if (mode === "list") text = $("lnIn").value;
+        else {
+          const sp = $("lnSp").value.trim(), ipa = $("lnIpa").value.trim().replace(/^\/|\/$/g, "");
+          if (!sp || !ipa) { $("lnRes").innerHTML = '<p class="err-text">Type the spelling and the IPA.</p>'; return; }
+          text = `${sp} /${ipa}/ | ${$("lnPos").value.trim()} | ${$("lnGl").value.trim()}`;
+        }
+        const r = parseLoans(lang, text); pending = r;
+        const ok = r.rows.filter(w => w.entry), skipped = r.rows.filter(w => !w.entry), flagged = ok.filter(w => w.flags.length);
+        $("lnRes").innerHTML = !r.rows.length ? '<p class="err-text">Nothing to add.</p>' : `
+          <p class="${ok.length ? "okline" : "warnline"}" style="margin:8px 0">${ok.length} loan${ok.length === 1 ? "" : "s"} ready${flagged.length ? `, ${flagged.length} with flags (added anyway)` : ""}${skipped.length ? `; ${skipped.length} skipped` : ""}.</p>
+          <ul class="list">${r.rows.map(w => w.entry
+            ? `<li><b>${esc(w.written)}</b> <span class="muted small ipa">/${esc(w.entry.surface)}/</span>${w.flags.length ? `<br><span class="warn-text small">${w.flags.map(esc).join("; ")}</span>` : ""}</li>`
+            : `<li class="muted"><s>${esc(w.line)}</s><br><span class="err-text small">${esc(w.skip)}</span></li>`).join("")}</ul>`;
+        $("sheet").querySelector('[data-x="add"]').disabled = !ok.length;
+        return;
+      }
+      if (k === "add" && pending && pending.added) {
+        lang = pending.next; closeSheet(); changed(); render(); toast(`Added ${pending.added} loan${pending.added === 1 ? "" : "s"}`);
+      }
+    });
+    $("lnFile").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) f.text().then(t => { $("lnIn").value = t; }); });
+    ["lnIn", "lnSp", "lnIpa", "lnPos", "lnGl"].forEach(id => $(id).addEventListener("input", () => { pending = null; $("sheet").querySelector('[data-x="add"]').disabled = true; }));
   }
   function doGenerate() {
     const r = generateWords(lang, GENERATE_BATCH, (Math.random() * 4294967296) >>> 0);
@@ -3343,6 +3484,7 @@ if (typeof document !== "undefined") (function () {
     else if (act === "clearw") openRemove();
     else if (act === "sheetout") openMeaningSheet("out");
     else if (act === "sheetin") openMeaningSheet("in");
+    else if (act === "loans") openLoans();
     else if (act === "regen") {
       const live = lang.lexicon.filter(w => isObj(w) && w.status === "live"), kept = live.filter(w => w.reviewed).length, meant = live.filter(w => w.slot).length;
       openSheet(`<h2>Regenerate unlocked words?</h2><p style="margin:0">This removes ${live.length} unlocked word${live.length === 1 ? "" : "s"}${kept || meant ? ` (${[meant ? `${meant} with a meaning` : "", kept ? `${kept} you marked Keep` : ""].filter(Boolean).join(", ")})` : ""} and makes ${GENERATE_BATCH} new words without meanings. Locked and vetoed words stay (vetoed forms never come back).</p>
