@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-15-0021">
+<meta name="build" content="build 2026-11-16-2041">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,13 +247,13 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-15-0021 (made on build 2026-11-15-0012)
+   Conlang Pipeline — build 2026-11-16-2041 (made on build 2026-11-15-0021)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-15-0021";
-const BASE_BUILD = "build 2026-11-15-0012";
+const BUILD = "build 2026-11-16-2041";
+const BASE_BUILD = "build 2026-11-15-0021";
 const FORMAT = "conlang-pipeline";
-const VERSION = 6;
+const VERSION = 7;
 const STORE_KEY = "conlang-pipeline:autosave";
 const META_KEY = "conlang-pipeline:meta";   // { lastExport, dirtySince } — tool state, not language data
 const UI_KEY = "conlang-pipeline:ui";       // { soundView } — tool state, not language data
@@ -331,7 +331,9 @@ const MIGRATIONS = {
   },
   // 5 → 6 (Chilly, 2026-11-14): lexicon entries may have source "loan". Nothing in the file changes; the bump keeps
   // older builds (which would run loans through sound changes) from opening it.
-  5: d => d
+  5: d => d,
+  // 6 → 7: nothing in the file changes; lexicon entries may now have source "edited" (words changed by hand).
+  6: d => d,
 };
 
 /* ---------------- Sound catalog (tool data, not language data) ---------------- */
@@ -1088,18 +1090,29 @@ function eraInventories(lang) {
 /* Loanwords (Chilly, 2026-11-14): lexicon entries with source "loan". They were borrowed as they are now, so sound
    changes never touch them (their proto-form is their modern written form). Proto-forms are unique in the lexicon,
    so the proto-form identifies the loan. */
-let _loanMemo = { arr: null, len: -1, set: null };
-function isLoanProto(lang, proto) {
+/* Edited words (Chilly, 2026-11-16; build 2026-11-16-2041): source "edited", a word whose form was changed by hand in an
+   uploaded word list. Its form is the modern one, so sound changes skip it too, like a loan. */
+let _loanMemo = { arr: null, len: -1, map: null };
+function fixedKind(lang, proto) {
   const lx = lang.lexicon;
-  if (!Array.isArray(lx)) return false;
-  if (_loanMemo.arr !== lx || _loanMemo.len !== lx.length) _loanMemo = { arr: lx, len: lx.length, set: new Set(lx.filter(w => isObj(w) && w.source === "loan").map(w => w.proto)) };
-  return _loanMemo.set.has(proto);
+  if (!Array.isArray(lx)) return null;
+  if (_loanMemo.arr !== lx || _loanMemo.len !== lx.length) {
+    const map = new Map();
+    for (const w of lx) if (isObj(w) && (w.source === "loan" || w.source === "edited") && w.status !== "vetoed" && !map.has(w.proto)) map.set(w.proto, w.source);
+    _loanMemo = { arr: lx, len: lx.length, map };
+  }
+  return _loanMemo.map.get(proto) || null;
 }
+function forgetFixedKinds() { _loanMemo = { arr: null, len: -1, map: null }; }
+function isLoanProto(lang, proto) { return fixedKind(lang, proto) === "loan"; }
 function evolve(lang, proto) {
   const base = langEnv(lang);
   let segs = segmentWord(proto, base);
   const stages = { proto: segs.slice() }, trace = [];
-  if (!lang.proto || !lang.proto.enabled || isLoanProto(lang, proto)) { stages.modern = segs; return { segs, stages, trace, loan: isLoanProto(lang, proto) }; }
+  const fk = fixedKind(lang, proto);
+  // A loan or edited word is a modern form, so it is split with the modern sounds too (oː stays one sound).
+  if (fk && lang.proto && lang.proto.enabled) { segs = segmentWord(proto, envWith(base, [...base.symbols, ...eraInventories(lang).modern])); stages.proto = segs.slice(); }
+  if (!lang.proto || !lang.proto.enabled || fk) { stages.modern = segs; return { segs, stages, trace, loan: fk === "loan", edited: fk === "edited" }; }
   for (const e of eraInventories(lang).eras) {
     for (const { ch, pr, env } of e.rules) {
       if (pr.error) continue;
@@ -1670,7 +1683,8 @@ function meaningSheetText(lang) {
   const lines = [
     `# Meaning sheet for ${lang.language.name || "my conlang"}. One row per word, shortest words first.`,
     "# Columns: word id | word (spelling /pronunciation/) | part of speech | meaning",
-    "# Fill in part of speech and meaning for the words you use. Keep the word id. Rows left blank stay as they are.",
+    "# Keep the word id. Send back only the rows you change; rows left out stay as they are.",
+    "# A blank meaning clears that word's meaning. Changing the word (spelling /ipa/) changes the word itself.",
     "# Each meaning belongs to one word: two words can't share the exact same meaning (use e.g. big / large). A meaning can't contain |.",
     "word id | word | part of speech | meaning"
   ];
@@ -1680,24 +1694,61 @@ function meaningSheetText(lang) {
   }
   return lines.join("\n") + "\n";
 }
-// Merge meanings back from a sheet. Works on a copy and reports what would change; nothing but meanings changes.
+// Merge a word list back (Chilly, 2026-11-16; build 2026-11-16-2041). Works on a copy and reports what would change.
+// Per row, by word id: a changed word column (spelling /ipa/) changes the word (not locked; marked "edited", so sound
+// changes skip it); a blank meaning clears the word's meaning; otherwise the meaning is set. Rows left out change nothing.
 function mergeMeaningSheet(lang, text) {
-  const next = clone(lang), st = { set: 0, created: 0, unchanged: 0, blank: 0, unknown: [], bad: 0, displaced: [], shapeClash: 0, newPos: [] };
+  const next = clone(lang), st = { set: 0, created: 0, unchanged: 0, blank: 0, cleared: 0, unknown: [], bad: 0, displaced: [], shapeClash: 0, newPos: [], respelled: [], formBad: [], formFlags: [] };
   const byLabel = {}; for (const [id, p] of Object.entries(next.partsOfSpeech)) { byLabel[id.toLowerCase()] = id; byLabel[String(p.label).toLowerCase()] = id; }
+  const env = langEnv(next), mod = eraInventories(next).modern, segEnv = envWith(env, [...env.symbols, ...mod, ...CAT.keys()]), silent = silentSet(next);
+  const known = new Set([...Object.keys(next.sounds.consonants), ...Object.keys(next.sounds.vowels), ...mod]);
+  const byId = new Map(), protos = new Map();
+  for (const w of next.lexicon) if (isObj(w) && w.status !== "vetoed") { byId.set(w.id, w); if (!protos.has(w.proto)) protos.set(w.proto, w); }
   let n = nextSlotNum(next);
   for (const raw of String(text).split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#") || /^word id\s*\|/i.test(line)) continue;
     const f = line.split("|").map(x => x.trim());
     if (f.length < 4 || !/^w\d+$/.test(f[0])) { st.bad++; continue; }
-    const e = next.lexicon.find(w => isObj(w) && w.id === f[0] && w.status !== "vetoed");
+    const e = byId.get(f[0]);
     if (!e) { st.unknown.push(f[0]); continue; }
     // Read from both ends: a spelling may contain |, a meaning can't. So the meaning is the last column and the part of speech the one before.
-    const gloss = f[f.length - 1], posTxt = f[f.length - 2];
-    if (!gloss) { st.blank++; continue; }
-    const cur = next.meanings.find(m => m.id === e.slot);
+    const gloss = f[f.length - 1], posTxt = f[f.length - 2], wordCol = f.slice(1, f.length - 2).join(" | ").trim().normalize("NFC");
+    // The word itself
+    const before = `${spellProto(next, e.proto)} /${e.surface}/`;
+    if (wordCol && wordCol !== before.normalize("NFC")) {
+      const m = /^(.*?)\s*\/([^/]*)\/\s*$/.exec(wordCol);
+      if (!m || !m[1].trim() || !m[2].trim()) st.formBad.push(e.id);
+      else {
+        const spelled = m[1].trim(), ipa = m[2].trim().replace(/:/g, "ː");
+        const said = segmentWord(ipa, segEnv).filter(x => !silent.has(x));
+        let root = rebuildRoot(next, said, spelled), fl = [];
+        const odd = [...new Set(said.filter(x => !known.has(x)))];
+        if (odd.length) fl.push(`uses sounds your language doesn't have: ${odd.join(" ")}`);
+        if (!root) { root = said; fl.push(`"${spelled}" doesn't match /${ipa}/ with your spellings; taken from the IPA`); }
+        const proto = root.join("");
+        if (proto !== e.proto) {
+          const other = protos.get(proto);
+          if (other && other !== e) fl.push(`same form as ${other.id}`);
+          if (protos.get(e.proto) === e) protos.delete(e.proto);
+          if (!protos.has(proto)) protos.set(proto, e);
+          e.proto = proto; e.surface = soundedOnly(next, root).join("");
+          if (e.source !== "loan") e.source = "edited";
+          forgetFixedKinds();
+          const written = spellProto(next, proto);
+          if (written !== spelled) fl.push(`your spelling rules write it ${written}`);
+          if (!syllableShapes(next, proto).length) fl.push("doesn't fit your syllable patterns");
+          const sr = shapeReject(next, proto, null); if (sr >= 0) fl.push(`breaks shape rule ${sr + 1}`);
+          st.respelled.push({ id: e.id, from: before, to: `${written} /${e.surface}/`, locked: e.status === "locked" });
+          if (fl.length) st.formFlags.push(`${e.id} ${written}: ${fl.join("; ")}`);
+        }
+      }
+    }
+    // The meaning
+    const cur = next.meanings.find(x => x.id === e.slot);
+    if (!gloss) { if (cur) { e.slot = null; st.cleared++; } else st.blank++; continue; }
     if (cur && cur.gloss.toLowerCase() === gloss.toLowerCase()) { st.unchanged++; continue; }
-    let slot = next.meanings.find(m => m.gloss.toLowerCase() === gloss.toLowerCase());
+    let slot = next.meanings.find(x => x.gloss.toLowerCase() === gloss.toLowerCase());
     if (!slot) {
       // A part of speech the sheet names that the language doesn't have yet is added (and listed in the check).
       let pos = posTxt ? byLabel[posTxt.toLowerCase()] : (cur && cur.pos) || "";
@@ -1711,6 +1762,7 @@ function mergeMeaningSheet(lang, text) {
     e.slot = slot.id; st.set++;
     if (shapeReject(next, e.proto, slot.pos) >= 0) st.shapeClash++;
   }
+  st.changes = st.set + st.cleared + st.respelled.length;
   return { next, st };
 }
 
@@ -1787,8 +1839,9 @@ function rebuildRoot(lang, said, spelled) {
 }
 function parseLoans(lang, text, opts) {
   const exclude = (opts && opts.exclude) || new Set();
-  const next = clone(lang), rows = [], env = langEnv(next), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]);
-  const known = new Set([...Object.keys(next.sounds.consonants), ...Object.keys(next.sounds.vowels)]);
+  // Sounds your sound changes make (e.g. oː) count as known sounds of the language (build 2026-11-16-2041).
+  const next = clone(lang), rows = [], env = langEnv(next), mod = eraInventories(next).modern, segEnv = envWith(env, [...env.symbols, ...mod, ...CAT.keys()]);
+  const known = new Set([...Object.keys(next.sounds.consonants), ...Object.keys(next.sounds.vowels), ...mod]);
   const byLabel = {}; for (const [id, p] of Object.entries(next.partsOfSpeech)) { byLabel[String(p.label).toLowerCase()] = id; byLabel[id] = id; }
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("#"));
   // Work out each word's form once, not once per line (with homophones on, a form needs a full evolve; build 2026-11-15-0012).
@@ -1984,7 +2037,7 @@ function nextWordId(lang) {
 }
 
 /* Expose the core for tests (Node). */
-if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, removeParts, silentSet, soundedOnly, parseLoans, rebuildRoot, isLoanProto, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
+if (typeof module !== "undefined") module.exports = { skeleton, serialize, checkFile, CAT, GROUPS, PRESETS, BUILD, expandPattern, syncAutoClasses, buildGenerator, sampleWords, nextWordId, makeRng, parseRule, segmentWord, spellWord, spellProto, langEnv, unspelledSounds, evolve, deriveSurface, eraInventories, basisInventory, refreshSurfaces, applyChange, envWith, spellEnv, hash32, parseShapePattern, patternMatches, shapeReject, shapeStats, STARTER_MEANINGS, STARTER_POS, loadStarterMeanings, importMeanings, generateWords, GENERATE_BATCH, posSlug, removeParts, silentSet, soundedOnly, parseLoans, rebuildRoot, isLoanProto, fixedKind, clearUnlocked, learnFrom, effWeight, nearTwin, slotHasWord, replacementFor, nearTwinsOf, meaningSheetText, mergeMeaningSheet, soundFrequency, nearTwinPairs, CLASS_GROUPS, soundGroups, groupMembers, syncClasses, VERSION, syllableShapes, badSymbolChar };
 
 /* ============================================================
    Interface
@@ -2571,6 +2624,7 @@ if (typeof document !== "undefined") (function () {
     // Find each step's era by id in the current language (never by object identity).
     const eraOf = e => { const k = lang.proto.eras.findIndex(x => isObj(x) && x.id === e.id); return eraLabel(k >= 0 ? lang.proto.eras[k] : e, k); };
     if (ev.loan) h += `<p class="muted small">A loanword: borrowed as it is now, so sound changes don't apply.</p>`;
+    if (ev.edited && lang.proto.enabled) h += `<p class="muted small">Changed by hand in a word list, so sound changes don't apply.</p>`;
     else if (!lang.proto.enabled) h += `<p class="muted small">This language is on the modern path, so it has no sound changes.</p>`;
     else if (!ev.trace.length) h += `<p class="muted small">No rule touches this word.</p>`;
     else h += `<ol class="trace">${ev.trace.map(t => `<li><span class="muted small">${esc(eraOf(t.era))} · </span><code>${esc(t.rule)}</code><br>${t.skipped ? `<span class="muted small">skipped (patchy rule)</span>` : `<span class="ipa">${esc(t.before)} → <b>${esc(t.after)}</b></span>`}</li>`).join("")}</ol>`;
@@ -2707,7 +2761,7 @@ if (typeof document !== "undefined") (function () {
     }
     // 3. hand the words to an AI chat and bring the meanings back
     h += `<h2>Give them meanings</h2><p class="ghint">Export the word list (shortest words first) for your lexicon and grammar chats. They fill in part of speech and meaning for the words they use; you upload the result. Only meanings and parts of speech come back, and you see what would change before anything does. Veto first if you want to cut words.</p>
-      <div class="toolbar"><button class="btn primary" data-act="sheetout" ${words.length ? "" : "disabled"}>Export word list</button><button class="btn" data-act="sheetin" ${words.length ? "" : "disabled"}>Upload meanings</button></div>
+      <div class="toolbar"><button class="btn primary" data-act="sheetout" ${words.length ? "" : "disabled"}>Export word list</button><button class="btn" data-act="sheetin" ${words.length ? "" : "disabled"}>Upload word list</button></div>
       <h2>Loanwords</h2><p class="ghint">Words borrowed from elsewhere, written as <code>spelling /ipa/ | part of speech | meaning</code>. They come in locked, and sound changes never touch them. Anything that breaks your rules is flagged, not refused.</p>
       <div class="toolbar"><button class="btn" data-act="loans">Add loanwords</button></div>`;
     // 4. meanings
@@ -3039,11 +3093,11 @@ if (typeof document !== "undefined") (function () {
   function openMeaningSheet(mode) {
     const text = meaningSheetText(lang), rows = text.split("\n").filter(l => /^w\d+ \|/.test(l)).length;
     const out = mode !== "in", inn = mode !== "out";
-    openSheet(`<h2>${mode === "out" ? "Export word list" : mode === "in" ? "Upload meanings" : "Meaning sheet"}</h2>
-      ${out ? `<p class="muted small" style="margin:0 0 6px">Your ${rows} words, shortest first, for an AI chat (or you) to fill in part of speech and meaning. Uploading it back changes only meanings and parts of speech.</p>
+    openSheet(`<h2>${mode === "out" ? "Export word list" : mode === "in" ? "Upload word list" : "Word list"}</h2>
+      ${out ? `<p class="muted small" style="margin:0 0 6px">Your ${rows} words, shortest first, for an AI chat (or you) to fill in part of speech and meaning. Uploading it back changes meanings, parts of speech and any word you respelled.</p>
       <textarea id="msOut" readonly rows="7" class="sheettext">${esc(text)}</textarea>
       <div class="toolbar"><button class="btn" data-x="copy">Copy</button><button class="btn" data-x="dl">Download .txt</button></div>` : ""}
-      ${inn ? `${out ? "<h3>Bring meanings back</h3>" : `<p class="muted small" style="margin:0 0 6px">Paste the filled-in word list or choose its file, then Check to see what would change.</p>`}
+      ${inn ? `${out ? "<h3>Bring changes back</h3>" : `<p class="muted small" style="margin:0 0 6px">Paste the changed rows (only those are needed) or choose the file, then Check to see what would change. Per row: a new meaning is set, a blank meaning clears it, a changed word (spelling /ipa/) changes the word. Words not in the list stay as they are.</p>`}
       <textarea id="msIn" rows="${out ? 5 : 9}" class="sheettext" placeholder="Paste the filled-in word list here"></textarea>
       <div class="toolbar"><button class="btn" data-x="file">Or choose a file</button><button class="btn primary" data-x="check">Check</button></div>
       <input type="file" id="msFile" accept=".txt,text/plain" hidden>
@@ -3065,18 +3119,22 @@ if (typeof document !== "undefined") (function () {
         const lines = [];
         if (st.set) lines.push(`${st.set} word${st.set === 1 ? "" : "s"} get${st.set === 1 ? "s" : ""} a new meaning${st.created ? ` (${st.created} new meaning${st.created === 1 ? "" : "s"} added to the list)` : ""}.`);
         if (st.newPos.length) lines.push(`New part${st.newPos.length === 1 ? "" : "s"} of speech added: ${st.newPos.join(", ")}.`);
-        if (st.unchanged) lines.push(`${st.unchanged} unchanged.`);
-        if (st.blank) lines.push(`${st.blank} blank, left as they are.`);
+        if (st.respelled.length) lines.push(`${st.respelled.length} word${st.respelled.length === 1 ? "" : "s"} changed: ${st.respelled.slice(0, 12).map(r => `${r.id} ${r.from} → ${r.to}${r.locked ? " (locked)" : ""}`).join("; ")}${st.respelled.length > 12 ? "; …" : ""}.`);
+        for (const x of st.formFlags.slice(0, 20)) lines.push(`⚑ ${x}`);
+        if (st.formBad.length) lines.push(`Word column not read as "spelling /ipa/", word left as it is: ${st.formBad.slice(0, 8).join(", ")}.`);
+        if (st.cleared) lines.push(`${st.cleared} word${st.cleared === 1 ? " loses its" : "s lose their"} meaning (blank meaning).`);
+        if (st.unchanged) lines.push(`${st.unchanged} meaning${st.unchanged === 1 ? "" : "s"} unchanged.`);
+        if (st.blank) lines.push(`${st.blank} blank row${st.blank === 1 ? "" : "s"} for words with no meaning, nothing to clear.`);
         if (st.displaced.length) lines.push(`${st.displaced.length} other word${st.displaced.length === 1 ? " loses its" : "s lose their"} meaning (it went to another word): ${st.displaced.slice(0, 8).join(", ")}.`);
         if (st.shapeClash) lines.push(`${st.shapeClash} word${st.shapeClash === 1 ? " breaks" : "s break"} a shape rule for its new part of speech.`);
         if (st.unknown.length) lines.push(`Unknown word ids ignored: ${st.unknown.slice(0, 8).join(", ")}.`);
         if (st.bad) lines.push(`${st.bad} line${st.bad === 1 ? "" : "s"} not understood, ignored.`);
-        $("msRes").innerHTML = `<div class="${st.set ? "okline" : "warnline"}" style="margin-top:8px">${lines.map(esc).join("<br>") || "Nothing to change."}</div>
-          ${st.set ? '<div class="toolbar"><button class="btn primary" data-x="apply">Apply these meanings</button></div>' : ""}`;
+        $("msRes").innerHTML = `<div class="${st.changes ? "okline" : "warnline"}" style="margin-top:8px">${lines.map(esc).join("<br>") || "Nothing to change."}</div>
+          ${st.changes ? '<div class="toolbar"><button class="btn primary" data-x="apply">Apply these changes</button></div>' : ""}`;
         openMeaningSheet.pending = next;
         return;
       }
-      if (a === "apply" && openMeaningSheet.pending) { lang = openMeaningSheet.pending; openMeaningSheet.pending = null; renumberMeanings(lang); changed(); closeSheet(); render(); toast("Meanings updated"); }
+      if (a === "apply" && openMeaningSheet.pending) { lang = openMeaningSheet.pending; openMeaningSheet.pending = null; renumberMeanings(lang); changed(); closeSheet(); render(); toast("Word list applied"); }
     });
     if ($("msFile")) $("msFile").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) f.text().then(t => { $("msIn").value = t; }); });
   }
