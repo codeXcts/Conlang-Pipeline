@@ -22,6 +22,10 @@
     font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: var(--bg);
     padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+  nav.tools { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin-bottom: 8px; }
+  nav.tools::-webkit-scrollbar { display: none; }
+  nav.tools a { text-decoration: none; color: var(--muted); font-size: 14px; padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+  nav.tools a.on { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   h1 { font-size: 18px; margin: 0; flex: 1; }
   #count { color: var(--muted); font-size: 13px; }
@@ -71,6 +75,7 @@
 </head>
 <body>
 <header>
+  <nav class="tools"><a href="index.html" class="on">Lookup</a><a href="flashcards.html">Cards</a><a href="quiz.html">Quiz</a><a href="glosser.html">Gloss</a><a href="builder.html">Build</a><a href="phrasebook.html">Phrases</a><a href="reader.html">Read</a></nav>
   <div class="row" style="margin-bottom:8px">
     <h1 id="title">Word Lookup</h1>
     <span id="count"></span>

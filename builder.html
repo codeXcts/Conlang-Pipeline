@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Word Builder</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  .result { text-align: center; padding: 22px 12px; }
+  .result .form { font-size: 38px; font-weight: 800; letter-spacing: .5px; word-break: break-word; }
+  .result .gl { font-family: ui-monospace, monospace; color: var(--accent); margin-top: 4px; }
+  .status { border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 15px; }
+  .status.new { background: var(--good-soft); color: var(--good); }
+  .status.exists { background: var(--accent-soft); color: var(--accent); }
+  .status.clash { background: var(--bad-soft); color: var(--bad); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 34px; }
+  .step { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 14px; }
+  .step button { border: 0; background: none; padding: 0 4px; color: inherit; }
+  .sugg { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; }
+  .sugg div { padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .sugg div:last-child { border-bottom: 0; }
+  .sugg div:hover { background: var(--accent-soft); }
+  .saved li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<header class="top"><div class="row"><h1 class="grow">Word Builder</h1></div></header>
+<main id="app">
+  <div class="card">
+    <div class="muted">1. Pick a root word</div>
+    <input id="root" type="search" placeholder="Type a word or an English meaning…" autocomplete="off" style="width:100%; margin-top:6px">
+    <div id="sugg" class="sugg" hidden></div>
+    <div id="rootInfo" class="muted" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:6px">2. Add pieces (in order)</div>
+    <div class="chips" id="pre"></div>
+    <div class="chips" id="suf" style="margin-top:6px"></div>
+    <div class="chips" id="fam" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:10px"><span class="muted">Pieces:</span><div class="steps grow" id="steps"></div>
+      <button id="undo" class="chip">Undo</button><button id="reset" class="chip">Clear</button></div>
+  </div>
+
+  <div class="card result" id="result"></div>
+
+  <h2>Saved ideas</h2>
+  <p class="muted">Words you build here are just ideas. Send the good ones to the Lexicon chat.</p>
+  <ul class="saved" id="saved"></ul>
+  <div class="row"><button id="copy">Copy list</button><button id="clearSaved">Clear list</button></div>
+</main>
+<script src="core.js"></script>
+<script>
+(() => {
+  const { $, esc, store, toast } = WL;
+  const SKEY = 'wl.builder.saved';
+  let root = null, steps = [], saved = store.get(SKEY, []);
+
+  // ---- root picker ----
+  const rootIn = $('#root'), sugg = $('#sugg');
+  rootIn.addEventListener('input', () => {
+    const q = WL.fold(rootIn.value.trim());
+    if (!q) { sugg.hidden = true; return; }
+    const hits = WL.words().filter(w => !/^(ending|prefix)$/i.test(w.pos) &&
+      (WL.fold(w.word).startsWith(q) || WL.fold(w.meaning).split(/[^a-z]+/).includes(q) || WL.fold(w.meaning).startsWith(q)))
+      .sort((a, b) => (WL.fold(b.word) === q) - (WL.fold(a.word) === q) || a.word.length - b.word.length).slice(0, 30);
+    sugg.innerHTML = hits.map(w => `<div data-id="${esc(w.id)}"><b>${esc(w.word)}</b> <span class="muted">${esc(w.pos)}</span> ${esc(w.meaning || '')}</div>`).join('')
+      || `<div class="muted" data-raw="1">Use “${esc(rootIn.value.trim())}” as a made-up root</div>`;
+    sugg.hidden = false;
+  });
+  sugg.addEventListener('click', e => {
+    const d = e.target.closest('div[data-id],div[data-raw]'); if (!d) return;
+    root = d.dataset.id ? WL.words().find(w => w.id === d.dataset.id) : { word: rootIn.value.trim().toLowerCase(), pos: '', meaning: '', id: '' };
+    rootIn.value = root.word; sugg.hidden = true; steps = [];
+    render();
+  });
+
+  // ---- piece chips ----
+  const R = WL.RULES;
+  const chip = (type, r) => `<button class="chip" data-type="${type}" data-id="${r.id}">${esc(type === 'prefix' ? r.forms.join('/') + '-' : '-' + r.forms.join('/'))} <span class="muted">${esc(r.label.split(' (')[0])}</span></button>`;
+  $('#pre').innerHTML = R.prefixes.map(r => chip('prefix', r)).join('');
+  $('#suf').innerHTML = R.suffixes.filter(s => s.kind !== 'family').map(r => chip('suffix', r)).join('');
+  $('#fam').innerHTML = '<span class="muted" style="font-size:13px; align-self:center">Family words: </span>' + R.suffixes.filter(s => s.kind === 'family').map(r => chip('suffix', r)).join('');
+  document.querySelectorAll('.chips').forEach(c => c.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (!root) { toast('Pick a root word first'); rootIn.focus(); return; }
+    steps.push({ type: b.dataset.type, id: b.dataset.id }); render();
+  }));
+  $('#undo').onclick = () => { steps.pop(); render(); };
+  $('#reset').onclick = () => { steps = []; render(); };
+
+  function stepLabel(s) {
+    const r = (s.type === 'prefix' ? R.prefixes : R.suffixes).find(x => x.id === s.id);
+    return s.type === 'prefix' ? r.forms.join('/') + '-' : '-' + r.forms.join('/');
+  }
+  function describe(rootW, st) {
+    let m = rootW.meaning ? WL.shortMeaning(rootW.meaning) : rootW.word;
+    for (const s of st) {
+      const r = (s.type === 'prefix' ? R.prefixes : R.suffixes).find(x => x.id === s.id);
+      m = ({ past: `${m} (past)`, fut: `will ${m}`, would: `would ${m}`, cmd: `${m}!`, noun: `${m} (the thing/quality)`,
+        desc: `${m}-like`, dim: `little/dear ${m}`, doer: `one who does “${m}”`, place: `place for ${m}`, tool: `tool for ${m}`,
+        opp: `un-${m}`, again: `${m} again` })[s.id] || `${r.tag} ${m}`;
+    }
+    return m;
+  }
+
+  function render() {
+    $('#steps').innerHTML = steps.map((s, i) => `<span class="step">${esc(stepLabel(s))}<button data-i="${i}" aria-label="remove">×</button></span>`).join('') || '<span class="muted">none yet</span>';
+    $('#steps').querySelectorAll('button').forEach(b => b.onclick = () => { steps.splice(+b.dataset.i, 1); render(); });
+    if (!root) {
+      $('#rootInfo').textContent = '';
+      $('#result').innerHTML = WL.words().length ? '<p class="muted">Pick a root to start building.</p>' : WL.noWordsHTML();
+      return;
+    }
+    $('#rootInfo').innerHTML = root.id ? `${esc(root.word)} · ${esc(root.pos)} · ${esc(root.meaning || 'no meaning')}` : 'made-up root (not in the list)';
+    const fam = steps.some(s => R.suffixes.find(x => x.id === s.id)?.kind === 'family');
+    const { form, notes } = WL.build(root.word, steps);
+    const hits = steps.length ? WL.find(form) : [];
+    const isFam = /family/i.test(root.pos || '');
+    let status;
+    if (!steps.length) status = '<div class="status exists">That’s the root itself. Add pieces above.</div>';
+    else if (hits.length) {
+      const h = hits[0];
+      const same = WL.analyze(form).best?.parts.find(p => p.type === 'root')?.entry?.id === root.id;
+      status = `<div class="status ${same ? 'exists' : 'clash'}">${same ? '✔ Already in the list' : '⚠ Clash: already a different word'}: <b>${esc(h.word)}</b> = ${esc(h.meaning || '(no meaning)')}</div>`;
+    } else status = `<div class="status new">✨ New. Not in the word list yet.</div>`;
+    const warn = [];
+    if (fam && !isFam) warn.push('The pronoun endings join only onto family words (grammar §4).');
+    $('#result').innerHTML = `<div class="form">${esc(form)}</div>
+      <div class="gl">${esc(root.word)}${steps.map(s => ' + ' + stepLabel(s)).join('')}</div>
+      <div style="margin-top:8px; font-size:17px">≈ ${esc(describe(root, steps))}</div>
+      ${status}
+      ${[...new Set(notes), ...warn].length ? `<ul class="muted" style="text-align:left; margin:10px 0 0; padding-left:18px">${[...new Set(notes), ...warn].map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      ${steps.length ? `<div class="row" style="justify-content:center; margin-top:12px"><button class="primary" id="save">Save idea</button>
+        <a href="glosser.html?t=${encodeURIComponent(form)}"><button>Check in Glosser</button></a></div>` : ''}`;
+    if ($('#save')) $('#save').onclick = () => {
+      const line = `${form} = ${describe(root, steps)} (${root.word}${steps.map(s => ' + ' + stepLabel(s)).join('')})`;
+      if (!saved.includes(line)) { saved.unshift(line); store.set(SKEY, saved); }
+      renderSaved(); toast('Saved');
+    };
+  }
+  function renderSaved() {
+    $('#saved').innerHTML = saved.map((s, i) => `<li>${esc(s)} <button class="chip" data-i="${i}">×</button></li>`).join('') || '<li class="muted">Nothing saved yet.</li>';
+    $('#saved').querySelectorAll('button').forEach(b => b.onclick = () => { saved.splice(+b.dataset.i, 1); store.set(SKEY, saved); renderSaved(); });
+  }
+  $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(saved.join('\n')); toast('Copied'); } catch { WL.download('word-ideas.txt', saved.join('\n'), 'text/plain'); } };
+  $('#clearSaved').onclick = () => { if (confirm('Clear all saved ideas?')) { saved = []; store.set(SKEY, saved); renderSaved(); } };
+
+  const q = new URLSearchParams(location.search).get('root');
+  if (q) { const w = WL.find(q)[0]; if (w) { root = w; rootIn.value = w.word; } }
+  document.addEventListener('wl:words', render);
+  render(); renderSaved();
+})();
+</script>
+</body>
+</html>

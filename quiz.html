@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Word Quiz</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  .q { text-align: center; padding: 26px 12px; }
+  .q .prompt { font-size: 40px; font-weight: 800; line-height: 1.15; word-break: break-word; }
+  .q .prompt.eng { font-size: 30px; }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .choices button { min-height: 86px; font-size: 21px; font-weight: 700; border-width: 2px; border-radius: 16px; padding: 10px; }
+  .choices button.right { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+  .choices button.wrong { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+  .hud { display: flex; justify-content: space-between; align-items: center; font-size: 18px; margin-bottom: 8px; }
+  .hud .streak { font-weight: 700; }
+  .dots { display: flex; gap: 4px; justify-content: center; margin: 6px 0 12px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  .dots i.ok { background: var(--good); } .dots i.no { background: var(--bad); } .dots i.now { outline: 2px solid var(--accent); }
+  .cheer { text-align: center; font-size: 28px; min-height: 40px; margin-top: 10px; }
+  .pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pick button { padding: 14px 8px; font-size: 16px; border-radius: 14px; }
+  .pick button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .end { text-align: center; padding: 30px 10px; }
+  .end .stars { font-size: 48px; letter-spacing: 6px; }
+  .end .score { font-size: 44px; font-weight: 800; }
+  @keyframes pop { 0% { transform: scale(.6); opacity: 0 } 60% { transform: scale(1.2) } 100% { transform: scale(1); opacity: 1 } }
+  .pop { animation: pop .35s ease-out; display: inline-block; }
+</style>
+</head>
+<body>
+<header class="top"><div class="row"><h1 class="grow">Word Quiz</h1></div></header>
+<main id="app"></main>
+
+<script src="core.js"></script>
+<script>
+(() => {
+  const { $, esc, store } = WL;
+  const CKEY = 'wl.quiz.cfg', BKEY = 'wl.quiz.best';
+  let cfg = store.get(CKEY, { player: '', mode: 'w2m', group: 'things', len: 10 });
+  let best = store.get(BKEY, {});
+  let round = null;
+  const CHEERS = ['🎉 Yes!', '⭐ Great!', '👏 Nice!', '🌟 Super!', '💪 You got it!', '🙌 Wow!'];
+  const OOPS = ['Almost!', 'Nice try!', 'Next one!'];
+
+  // Kid-friendly groups by part of speech
+  const GROUPS = {
+    things: { label: '🍎 Things', test: p => /^noun/.test(p) },
+    actions: { label: '🏃 Actions', test: p => p === 'verb' },
+    describe: { label: '🎨 Describing', test: p => /adjective/.test(p) },
+    family: { label: '👪 Family', test: p => /family/.test(p) },
+    numbers: { label: '🔢 Numbers', test: p => p === 'number' },
+    all: { label: '🎲 Everything', test: p => p && !/^(ending|prefix|particle|preposition)$/.test(p) },
+  };
+  const clean = m => m.replace(/\s*\(.*?\)\s*/g, ' ').replace(/^to /, '').split(/[;,]/)[0].trim();
+  const poolFor = g => WL.defined().filter(w => GROUPS[g].test(w.pos.toLowerCase()) && clean(w.meaning) && w.word.length < 14);
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+  function setup() {
+    if (!WL.words().length) { $('#app').innerHTML = WL.noWordsHTML(); return; }
+    const groups = Object.entries(GROUPS).map(([k, g]) => [k, g, poolFor(k).length]).filter(([, , n]) => n >= 4);
+    if (!groups.find(([k]) => k === cfg.group)) cfg.group = groups[0]?.[0] || 'all';
+    const bestKey = `${cfg.player || 'anyone'}|${cfg.group}|${cfg.mode}`;
+    $('#app').innerHTML = `
+      <div class="card"><div class="row"><span class="grow" style="font-size:18px">Who's playing?</span>
+        <input id="player" type="text" placeholder="Name" value="${esc(cfg.player)}" style="width:150px"></div></div>
+      <h2>What words?</h2>
+      <div class="pick" id="groups">${groups.map(([k, g, n]) => `<button data-g="${k}" aria-pressed="${k === cfg.group}">${g.label}<br><small class="muted">${n} words</small></button>`).join('')}</div>
+      <h2>How to play</h2>
+      <div class="pick" id="modes">
+        <button data-m="w2m" aria-pressed="${cfg.mode === 'w2m'}">See the word<br><small class="muted">pick what it means</small></button>
+        <button data-m="m2w" aria-pressed="${cfg.mode === 'm2w'}">See the meaning<br><small class="muted">pick the word</small></button></div>
+      <h2>How many?</h2>
+      <div class="pick" id="lens" style="grid-template-columns:repeat(3,1fr)">
+        ${[5, 10, 20].map(n => `<button data-n="${n}" aria-pressed="${cfg.len === n}">${n}</button>`).join('')}</div>
+      <p class="muted" style="text-align:center">${best[bestKey] != null ? `Best score: ${best[bestKey]}` : ''}</p>
+      <button class="primary" id="go" style="width:100%; padding:18px; font-size:20px; border-radius:16px; margin-top:6px">▶ Play!</button>`;
+    const bind = (sel, attr, fn) => $(sel).querySelectorAll('button').forEach(b => b.onclick = () => { fn(b.dataset[attr]); store.set(CKEY, cfg); setup(); });
+    bind('#groups', 'g', v => cfg.group = v);
+    bind('#modes', 'm', v => cfg.mode = v);
+    bind('#lens', 'n', v => cfg.len = +v);
+    $('#player').onchange = e => { cfg.player = e.target.value.trim(); store.set(CKEY, cfg); setup(); };
+    $('#go').onclick = start;
+  }
+
+  function start() {
+    if ($('#player')) { cfg.player = $('#player').value.trim(); store.set(CKEY, cfg); }
+    const pool = poolFor(cfg.group);
+    const picks = shuffle([...pool]).slice(0, Math.min(cfg.len, pool.length));
+    round = { pool, qs: picks, i: 0, score: 0, streak: 0, bestStreak: 0, marks: [] };
+    ask();
+  }
+
+  function choicesFor(w) {
+    const pos = w.pos.toLowerCase();
+    const same = round.pool.filter(x => x.id !== w.id && clean(x.meaning) !== clean(w.meaning) && x.word !== w.word);
+    const near = shuffle(same.filter(x => x.pos.toLowerCase() === pos));
+    const rest = shuffle(same.filter(x => x.pos.toLowerCase() !== pos));
+    const seen = new Set([cfg.mode === 'w2m' ? clean(w.meaning) : w.word]);
+    const out = [w];
+    for (const x of [...near, ...rest]) {
+      const k = cfg.mode === 'w2m' ? clean(x.meaning) : x.word;
+      if (seen.has(k)) continue; seen.add(k); out.push(x);
+      if (out.length === 4) break;
+    }
+    return shuffle(out);
+  }
+
+  function ask() {
+    const r = round;
+    if (r.i >= r.qs.length) return end();
+    const w = r.qs[r.i], opts = choicesFor(w);
+    const prompt = cfg.mode === 'w2m' ? esc(w.word) : esc(clean(w.meaning));
+    $('#app').innerHTML = `
+      <div class="hud"><span>${r.i + 1} / ${r.qs.length}</span><span class="streak">${r.streak >= 2 ? '🔥 ' + r.streak : ''}</span><span>⭐ ${r.score}</span></div>
+      <div class="dots">${r.qs.map((_, i) => `<i class="${r.marks[i] === true ? 'ok' : r.marks[i] === false ? 'no' : i === r.i ? 'now' : ''}"></i>`).join('')}</div>
+      <div class="card q"><div class="prompt ${cfg.mode === 'm2w' ? 'eng' : ''}">${prompt}</div></div>
+      <div class="choices">${opts.map(o => `<button data-id="${esc(o.id)}">${esc(cfg.mode === 'w2m' ? clean(o.meaning) : o.word)}</button>`).join('')}</div>
+      <div class="cheer" id="cheer"></div>
+      <div class="row" style="justify-content:center; margin-top:8px"><button id="quit" class="chip">Stop</button></div>`;
+    $('#quit').onclick = setup;
+    $('#app').querySelectorAll('.choices button').forEach(b => b.onclick = () => answer(b, w));
+  }
+
+  function answer(btn, w) {
+    const r = round, ok = btn.dataset.id === w.id;
+    $('#app').querySelectorAll('.choices button').forEach(b => {
+      b.disabled = true;
+      if (b.dataset.id === w.id) b.classList.add('right');
+    });
+    if (!ok) btn.classList.add('wrong');
+    r.marks[r.i] = ok;
+    if (ok) { r.score++; r.streak++; r.bestStreak = Math.max(r.bestStreak, r.streak); }
+    else r.streak = 0;
+    const msg = ok ? CHEERS[Math.floor(Math.random() * CHEERS.length)]
+      : `${OOPS[Math.floor(Math.random() * OOPS.length)]} <b>${esc(w.word)}</b> = ${esc(clean(w.meaning))}`;
+    $('#cheer').innerHTML = `<span class="pop">${msg}</span>`;
+    r.i++;
+    setTimeout(ask, ok ? 900 : 2200);
+  }
+
+  function end() {
+    const r = round, pct = r.score / r.qs.length;
+    const stars = pct === 1 ? 3 : pct >= .7 ? 2 : pct >= .4 ? 1 : 0;
+    const key = `${cfg.player || 'anyone'}|${cfg.group}|${cfg.mode}`;
+    const newBest = best[key] == null || r.score > best[key];
+    if (newBest) { best[key] = r.score; store.set(BKEY, best); }
+    const missed = r.qs.filter((_, i) => r.marks[i] === false);
+    $('#app').innerHTML = `<div class="end">
+      <div class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</div>
+      <div class="score">${r.score} / ${r.qs.length}</div>
+      <p style="font-size:20px">${pct === 1 ? 'Perfect! 🏆' : pct >= .7 ? 'Great job' : pct >= .4 ? 'Good try' : 'Keep practicing'}${cfg.player ? ', ' + esc(cfg.player) : ''}!</p>
+      ${newBest && r.score ? '<p>🎖️ New best score!</p>' : ''}
+      ${r.bestStreak >= 3 ? `<p>🔥 Longest streak: ${r.bestStreak}</p>` : ''}
+      ${missed.length ? `<div class="card" style="text-align:left"><b>Words to practice</b>${missed.map(w => `<div>${esc(w.word)} = ${esc(clean(w.meaning))}</div>`).join('')}</div>` : ''}
+      <div class="row" style="justify-content:center; margin-top:14px">
+        <button class="primary" id="again" style="padding:14px 22px; font-size:18px">Play again</button>
+        <button id="menu" style="padding:14px 22px; font-size:18px">Menu</button></div></div>`;
+    $('#again').onclick = start; $('#menu').onclick = setup;
+  }
+
+  document.addEventListener('wl:words', setup);
+  setup();
+})();
+</script>
+</body>
+</html>

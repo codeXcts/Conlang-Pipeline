@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flashcards</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  .flash { min-height: 230px; display: flex; flex-direction: column; justify-content: center; align-items: center;
+    text-align: center; cursor: pointer; user-select: none; padding: 24px 16px; }
+  .flash .big { font-size: 34px; font-weight: 700; line-height: 1.2; }
+  .flash .mid { font-size: 22px; margin-top: 10px; }
+  .flash .hint { margin-top: 16px; }
+  .rate { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .rate button { padding: 12px 4px; font-weight: 600; }
+  .rate small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  .r-again { border-color: var(--bad) !important; color: var(--bad) !important; }
+  .r-easy { border-color: var(--good) !important; color: var(--good) !important; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; text-align: center; margin: 10px 0; }
+  .stats div { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 4px; }
+  .stats b { display: block; font-size: 22px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="row">
+    <h1 class="grow">Flashcards</h1>
+    <select id="who" aria-label="Who is studying"></select>
+    <button id="addWho" title="Add a person">＋</button>
+  </div>
+</header>
+<main id="app"></main>
+
+<script src="core.js"></script>
+<script>
+(() => {
+  const { $, esc, store, toast } = WL;
+  const PKEY = 'wl.cards.people', SKEY = p => 'wl.cards.state.' + p, CKEY = 'wl.cards.cfg';
+  const DAY = 864e5;
+  let people = store.get(PKEY, ['Me']);
+  let cfg = store.get(CKEY, { who: people[0], dir: 'w2m', pos: '', newPerDay: 15, starOnly: false });
+  let state, queue = [], cur = null, shown = false, sessionDone = 0;
+
+  // state per card key "<id>|<dir>": { due, ivl (days), ef, reps, lapses, seen }
+  function load() { state = store.get(SKEY(cfg.who), { cards: {}, newDay: '', newCount: 0 }); }
+  function save() { store.set(SKEY(cfg.who), state); store.set(CKEY, cfg); }
+  const today = () => new Date().toISOString().slice(0, 10);
+
+  function pool() {
+    return WL.defined().filter(w => (!cfg.pos || w.pos.toLowerCase() === cfg.pos) && (!cfg.starOnly || WL.stars.has(w.id))
+      && !/^(ending|prefix)$/i.test(w.pos));
+  }
+  function dirsFor() { return cfg.dir === 'both' ? ['w2m', 'm2w'] : [cfg.dir]; }
+
+  function buildQueue() {
+    if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; }
+    const now = Date.now(), due = [], fresh = [];
+    for (const w of pool()) for (const d of dirsFor()) {
+      const k = w.id + '|' + d, c = state.cards[k];
+      if (!c) fresh.push({ w, d, k });
+      else if (c.due <= now) due.push({ w, d, k, c });
+    }
+    due.sort((a, b) => a.c.due - b.c.due);
+    // new cards: shortest/commonest first (list order), shuffled lightly
+    const room = Math.max(0, cfg.newPerDay - state.newCount);
+    const newOnes = fresh.slice(0, room * 3).sort(() => Math.random() - .5).slice(0, room);
+    queue = [...due, ...newOnes.map(x => ({ ...x, isNew: true }))];
+  }
+
+  function counts() {
+    const now = Date.now(); let due = 0, learned = 0, total = 0;
+    for (const w of pool()) for (const d of dirsFor()) {
+      total++; const c = state.cards[w.id + '|' + d];
+      if (c) { if (c.due <= now) due++; if (c.ivl >= 21) learned++; }
+    }
+    return { due, learned, total, newLeft: Math.max(0, cfg.newPerDay - (state.newDay === today() ? state.newCount : 0)) };
+  }
+
+  // SM-2 style scheduling. grade: 0 again, 1 hard, 2 good, 3 easy
+  function schedule(item, grade) {
+    const c = state.cards[item.k] || { ivl: 0, ef: 2.5, reps: 0, lapses: 0 };
+    if (item.isNew && !state.cards[item.k]) state.newCount++;
+    if (grade === 0) {
+      c.lapses++; c.reps = 0; c.ivl = 0; c.ef = Math.max(1.3, c.ef - 0.2);
+      c.due = Date.now() + 60e3;            // see it again in a minute
+      queue.splice(Math.min(3, queue.length), 0, { ...item, isNew: false, c });
+    } else {
+      c.reps++;
+      if (c.reps === 1) c.ivl = grade === 1 ? 1 : grade === 2 ? 1 : 3;
+      else if (c.reps === 2) c.ivl = grade === 1 ? 3 : grade === 2 ? 4 : 7;
+      else c.ivl = Math.round(c.ivl * (grade === 1 ? 1.2 : grade === 2 ? c.ef : c.ef * 1.3));
+      c.ef = Math.max(1.3, c.ef + (grade === 1 ? -0.15 : grade === 3 ? 0.15 : 0));
+      c.due = Date.now() + c.ivl * DAY - 3600e3; // an hour of slack so "tomorrow" means tomorrow morning
+    }
+    c.seen = Date.now();
+    state.cards[item.k] = c;
+    save();
+  }
+  const ivlLabel = (item, g) => {
+    const c = state.cards[item.k] || { ivl: 0, ef: 2.5, reps: 0 };
+    if (g === 0) return '1 min';
+    const reps = c.reps + 1;
+    const d = reps === 1 ? [1, 1, 3][g - 1] : reps === 2 ? [3, 4, 7][g - 1] : Math.round(c.ivl * [1.2, c.ef, c.ef * 1.3][g - 1]);
+    return d < 30 ? d + 'd' : Math.round(d / 30) + 'mo';
+  };
+
+  // ---------- views ----------
+  function home() {
+    if (!WL.words().length) { $('#app').innerHTML = WL.noWordsHTML(); return; }
+    load();
+    const n = counts();
+    const posList = [...new Set(WL.defined().map(w => w.pos.toLowerCase()).filter(p => p && !/^(ending|prefix)$/.test(p)))].sort();
+    $('#app').innerHTML = `
+      <div class="stats"><div><b>${n.due}</b><span class="muted">due</span></div>
+        <div><b>${Math.min(n.newLeft, n.total - Object.keys(state.cards).length)}</b><span class="muted">new today</span></div>
+        <div><b>${n.learned}</b><span class="muted">learned</span></div></div>
+      <div class="bar"><i style="width:${n.total ? (n.learned / n.total * 100) : 0}%"></i></div>
+      <p class="muted" style="text-align:center">${n.learned} of ${n.total} cards learned (21+ day interval)</p>
+      <button class="primary" id="start" style="width:100%; padding:14px; font-size:17px">Study now</button>
+      <h2>Deck</h2>
+      <div class="card">
+        <div class="row" style="margin-bottom:8px"><span class="muted grow">Show me</span>
+          <div class="seg" id="dir">
+            <button data-v="w2m">Word → meaning</button><button data-v="m2w">Meaning → word</button><button data-v="both">Both</button></div></div>
+        <div class="row" style="margin-bottom:8px"><span class="muted grow">Words</span>
+          <select id="pos"><option value="">All kinds</option>${posList.map(p => `<option ${p === cfg.pos ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+        <div class="row" style="margin-bottom:8px"><span class="muted grow">New cards per day</span>
+          <input id="npd" type="number" min="0" max="200" value="${cfg.newPerDay}" style="width:80px"></div>
+        <label class="chk"><input type="checkbox" id="starOnly" ${cfg.starOnly ? 'checked' : ''}> Only words starred in Lookup</label>
+      </div>
+      <h2>Progress</h2>
+      <div class="row"><button id="exp">Back up progress</button><button id="imp">Restore</button><button id="reset">Reset ${esc(cfg.who)}</button></div>
+      <p class="muted">Progress is saved separately for each person on this device. Back it up to move it to another phone.</p>`;
+    $('#dir').querySelectorAll('button').forEach(b => { b.setAttribute('aria-pressed', b.dataset.v === cfg.dir); b.onclick = () => { cfg.dir = b.dataset.v; save(); home(); }; });
+    $('#pos').onchange = e => { cfg.pos = e.target.value; save(); home(); };
+    $('#npd').onchange = e => { cfg.newPerDay = Math.max(0, +e.target.value || 0); save(); home(); };
+    $('#starOnly').onchange = e => { cfg.starOnly = e.target.checked; save(); home(); };
+    $('#start').onclick = () => { buildQueue(); sessionDone = 0; next(); };
+    $('#exp').onclick = () => WL.download(`flashcards-${cfg.who}.json`, JSON.stringify({ who: cfg.who, state }), 'application/json');
+    $('#imp').onclick = () => WL.importDialog({ title: 'Restore progress', help: 'Pick a flashcards backup (.json).', modes: false, accept: '.json',
+      onText(t) { const d = JSON.parse(t); if (!d.state?.cards) { toast('Not a flashcards backup'); return false; }
+        if (d.who && !people.includes(d.who)) { people.push(d.who); store.set(PKEY, people); }
+        cfg.who = d.who || cfg.who; state = d.state; save(); renderWho(); home(); toast('Progress restored'); } });
+    $('#reset').onclick = () => { if (confirm(`Erase all flashcard progress for ${cfg.who}?`)) { store.set(SKEY(cfg.who), null); home(); } };
+  }
+
+  function next() {
+    cur = queue.shift(); shown = false;
+    if (!cur) {
+      $('#app').innerHTML = `<div class="empty-state"><p style="font-size:44px">✅</p>
+        <p><b>All done${sessionDone ? ` — ${sessionDone} cards` : ''}!</b></p>
+        <p>Come back tomorrow for the next ones.</p><p><button id="back" class="primary">Back</button></p></div>`;
+      $('#back').onclick = home; return;
+    }
+    card();
+  }
+  function card() {
+    const { w, d } = cur;
+    const front = d === 'w2m'
+      ? `<div class="big">${esc(w.word)}</div>${w.ipa ? `<div class="ipa">/${esc(w.ipa)}/</div>` : ''}`
+      : `<div class="big" style="font-size:26px">${esc(w.meaning)}</div>${w.pos ? `<div class="pos" style="margin-top:8px">${esc(w.pos)}</div>` : ''}`;
+    const back = d === 'w2m'
+      ? `<div class="mid">${esc(w.meaning)}</div>${w.pos ? `<div class="pos" style="margin-top:8px">${esc(w.pos)}</div>` : ''}`
+      : `<div class="mid"><b>${esc(w.word)}</b></div>${w.ipa ? `<div class="ipa">/${esc(w.ipa)}/</div>` : ''}`;
+    $('#app').innerHTML = `
+      <div class="row muted" style="justify-content:space-between; margin-bottom:6px">
+        <span>${cur.isNew ? '🆕 new' : 'review'}</span><span>${queue.length} left</span>
+        <button id="stop" class="chip">Stop</button></div>
+      <div class="card flash" id="flash">${front}
+        ${shown ? `<hr style="width:60%; border:0; border-top:1px solid var(--line); margin:16px 0">${back}` : `<div class="hint muted">tap to show</div>`}</div>
+      ${shown ? `<div class="rate">
+        <button class="r-again" data-g="0">Again<small>${ivlLabel(cur, 0)}</small></button>
+        <button data-g="1">Hard<small>${ivlLabel(cur, 1)}</small></button>
+        <button data-g="2">Good<small>${ivlLabel(cur, 2)}</small></button>
+        <button class="r-easy" data-g="3">Easy<small>${ivlLabel(cur, 3)}</small></button></div>`
+      : `<button class="primary" id="show" style="width:100%; padding:14px">Show answer</button>`}`;
+    $('#stop').onclick = home;
+    const reveal = () => { if (!shown) { shown = true; card(); } };
+    $('#flash').onclick = reveal;
+    if (!shown) $('#show').onclick = reveal;
+    else $('#app').querySelectorAll('[data-g]').forEach(b => b.onclick = () => { schedule(cur, +b.dataset.g); sessionDone++; next(); });
+  }
+
+  document.addEventListener('keydown', e => {
+    if (!cur || e.target.tagName === 'INPUT') return;
+    if (e.key === ' ' && !shown) { e.preventDefault(); shown = true; card(); }
+    else if (shown && '1234'.includes(e.key)) { schedule(cur, +e.key - 1); sessionDone++; next(); }
+  });
+
+  function renderWho() {
+    $('#who').innerHTML = people.map(p => `<option ${p === cfg.who ? 'selected' : ''}>${esc(p)}</option>`).join('');
+  }
+  $('#who').onchange = e => { cfg.who = e.target.value; save(); cur = null; home(); };
+  $('#addWho').onclick = () => {
+    const n = (prompt('Name of the person studying:') || '').trim();
+    if (!n) return;
+    if (!people.includes(n)) { people.push(n); store.set(PKEY, people); }
+    cfg.who = n; save(); renderWho(); home();
+  };
+  document.addEventListener('wl:words', home);
+  renderWho(); home();
+})();
+</script>
+</body>
+</html>

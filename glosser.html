@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sentence Glosser</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  .il { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .wb { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 9px; cursor: pointer; min-width: 44px; }
+  .wb .t { font-weight: 700; font-size: 18px; }
+  .wb .m { font-size: 14px; color: var(--muted); }
+  .wb .m .aff { color: var(--accent); }
+  .wb .g { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent); }
+  .wb.unk { border-color: var(--bad); background: var(--bad-soft); }
+  .wb.unk .g { color: var(--bad); }
+  .wb.guess { border-style: dashed; }
+  .lit { font-size: 15px; background: var(--accent-soft); border-radius: 10px; padding: 8px 10px; }
+  .sent { margin-bottom: 18px; }
+  .legend { font-size: 12px; }
+  .legend code { color: var(--accent); }
+</style>
+</head>
+<body>
+<header class="top"><div class="row"><h1 class="grow">Sentence Glosser</h1></div></header>
+<main>
+  <textarea id="in" placeholder="Type or paste a sentence… e.g.  Dëmka dzūli: “Unur! Tsošta, mağišta!”"></textarea>
+  <div class="row" style="margin-top:8px">
+    <button class="primary" id="go">Gloss it</button>
+    <button id="clear">Clear</button>
+    <label class="chk"><input type="checkbox" id="live" checked> As I type</label>
+  </div>
+  <div id="out"></div>
+  <details style="margin-top:20px"><summary class="muted">What the tags mean</summary>
+    <div class="legend card" id="legend"></div></details>
+</main>
+<script src="core.js"></script>
+<script>
+(() => {
+  const { $, esc } = WL;
+  const inp = $('#in');
+
+  function gloss() {
+    if (!WL.words().length) { $('#out').innerHTML = WL.noWordsHTML(); return; }
+    const text = inp.value.trim();
+    if (!text) { $('#out').innerHTML = ''; return; }
+    const sentences = text.split(/(?<=[.!?…])\s+|\n+/).filter(s => s.trim());
+    let unknown = 0;
+    $('#out').innerHTML = sentences.map(s => {
+      const toks = [...s.matchAll(WL.tokenRe)].map(m => m[0]);
+      const rows = toks.map(t => {
+        const r = WL.analyze(t);
+        if (!r.best) unknown++;
+        const g = r.best ? WL.glossOf(r.best) : (/^\p{Lu}/u.test(t) ? 'NAME?' : '???');
+        const morph = r.best ? WL.morphHTML(r.best) : esc(r.clean);
+        return { t, r, g, morph };
+      });
+      const lit = rows.map(x => x.g.replace(/-?\b(PST|FUT|CMD|WOULD|NOUN|DESC|DIM|DOER|PLACE|TOOL|OPP|AGAIN)\b/g, m => {
+        const map = { PST: '(past)', FUT: '(will)', CMD: '(!)', WOULD: '(would)', NOUN: '-ness', DESC: '-y', DIM: '(little)', DOER: '-er', PLACE: '-place', TOOL: '-tool', OPP: 'un-', AGAIN: 're-' };
+        return ' ' + map[m.replace('-', '')];
+      }).replace(/-/g, ' ').replace(/\./g, ' ')).join(' ').replace(/\s+/g, ' ');
+      return `<div class="sent"><div class="il">${rows.map(x => `<div class="wb ${x.r.best ? (x.r.best.compound ? 'guess' : '') : 'unk'}" data-w="${esc(x.t)}">
+          <div class="t">${esc(x.t)}</div><div class="m">${x.r.liaison ? `<span class="muted">${esc(x.r.liaison)}'</span>` : ''}${x.morph}</div>
+          <div class="g">${esc(x.g)}</div></div>`).join('')}</div>
+        <div class="lit"><span class="muted">Word by word:</span> ${esc(lit)}</div></div>`;
+    }).join('') + (unknown ? `<p class="muted">${unknown} word${unknown > 1 ? 's' : ''} not found (red). Dashed = guessed compound. Tap any word for details.</p>`
+      : `<p class="muted">Tap any word for details.</p>`);
+    const url = new URL(location); url.searchParams.set('t', text); history.replaceState(null, '', url);
+  }
+
+  $('#out').addEventListener('click', e => { const b = e.target.closest('.wb'); if (b) WL.wordSheet(b.dataset.w); });
+  $('#go').onclick = gloss;
+  $('#clear').onclick = () => { inp.value = ''; gloss(); inp.focus(); };
+  let deb; inp.addEventListener('input', () => { if ($('#live').checked) { clearTimeout(deb); deb = setTimeout(gloss, 250); } });
+
+  $('#legend').innerHTML = [...WL.RULES.suffixes, ...WL.RULES.prefixes]
+    .map(r => `<div><code>${esc(r.tag)}</code> ${esc(r.label)}</div>`).join('') +
+    '<div><code>PL</code> plural</div><div><code>NAME?</code> capitalised word not in the list</div>';
+
+  const t = new URLSearchParams(location.search).get('t');
+  if (t) inp.value = t;
+  document.addEventListener('wl:words', gloss);
+  gloss();
+})();
+</script>
+</body>
+</html>

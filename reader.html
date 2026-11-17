@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reader</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  .line { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .jo { font-size: 20px; line-height: 1.6; }
+  .tw { cursor: pointer; border-radius: 4px; padding: 0 1px; }
+  .tw:hover, .tw.sel { background: var(--hl); }
+  .tw.unk { text-decoration: underline wavy var(--bad); text-underline-offset: 4px; }
+  .en { color: var(--muted); font-size: 15px; margin-top: 4px; }
+  .en.hide { display: none; }
+  .num { color: var(--muted); font-size: 12px; margin-right: 6px; }
+  .peek { font-size: 12px; padding: 2px 8px; margin-top: 4px; }
+  .lib .card { cursor: pointer; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="row">
+    <h1 class="grow" id="title">Reader</h1>
+    <button id="add" class="primary">Add text</button>
+  </div>
+</header>
+<main id="app"></main>
+
+<script src="core.js"></script>
+<script>
+(() => {
+  const { $, esc, store, toast } = WL;
+  const KEY = 'wl.reader.texts';
+  const SAMPLE = { title: 'Čāmi (The odd one out)', builtin: true, lines: [
+    ['An žinuliva, zla kųwu tsuben da Monfumo pacolo an unval.', 'At olive time, everyone in Monfumo went up the slope in the morning.'],
+    ['Kuska ze jugan i ze žloro, i ğibka ze banāta pa guwunes.', '(They) picked green olives and black olives, and carried the baskets to the press.'],
+    ['An jōva, zla kųwu jōsin pa jōvaso.', 'At the pause, every family went to its pause place.'],
+    ['Me nuzoka tus olkle gātsu šlažeç maro tësnurētanka.', 'But one old man stayed by himself beside the terrace wall.'],
+    ['E hrōmu ža. Nerka ža nu tsuben.', 'He was a stranger. Nobody knew him.'],
+    ['Ohaka banāta da ža, i cenka maği pųwan.', '(He) opened his basket and started to eat bread.'],
+    ['Miroka ža fi dzumibe, Mira.', 'A little girl, Mira, saw him.'],
+    ['Ğolka pa ža, i dëmka: "Nie jōžešta! Venšta, wonšešta jōva tse ro!"', '(She) ran to him and said: "Don\'t eat alone! Come, share the pause with us!"'],
+    ['Zemčika gātsu. "Hël, i tsur jōvaso da tros," dëmka ža.', 'The man smiled. "(I\'m) tired, and your pause place is far," he said.'],
+    ['"Nie tsur! A d\'an romocolo. Šta vo hi," dëmka Mira, i fazomka ğures pa ža.', '"(It\'s) not far! (It\'s) at the foot of the hill. Let\'s go," said Mira, and (she) handed him a walking stick.'],
+    ['Ğurka nano dzu pawadzu, pa jōvaso.', 'The two of them walked down the slope, to the pause place.'],
+    ['Nājolka cānë, pųwan hëg i hol losan tobas.', 'There was stew, warm bread and oil on the table.'],
+    ['Dëmka dzūli: "Unur! Tsošta, mağišta!"', 'Grandma said: "Welcome! Sit, eat!"'],
+    ['Mağika kųwu dzu ğōko, i hluka. Šo jōvanaka ronği.', 'They all ate together, and laughed. The pause meal was full of that warm, everyone\'s-here feeling.'],
+    ['Afa ronği, dëmka gātsu: "Zūti, e čāmi sa. Jēha, wonše jōva tse tros."', 'After the meal, the man said: "Yesterday, I was the odd one out. Today, (I) share the pause with you."'],
+    ['"Venšta fo mūju," dëmka dzūli. "Tsilo nājol fes uliva!"', '"Come tomorrow too," said Grandma. "There are still lots of olives!"'],
+    ['I an rēnu da l\'udzomį žurne, dëmka kųwu dzu pa ža: "Miroto!"', 'And at the first meeting of the next day, they all said to him: "Miroto!"'],
+  ].map(([jo, en]) => ({ jo, en })) };
+
+  let texts = store.get(KEY, null) || [SAMPLE];
+  let open = null, showAll = false;
+  const saveTexts = () => store.set(KEY, texts);
+
+  // Parse a story file: markdown table with a Jotsom column (and English), or plain lines.
+  function parseText(t, name) {
+    const title = (t.match(/^#\s+(.+)$/m) || [])[1] || name || 'Untitled';
+    const rows = t.split(/\r?\n/).filter(l => l.trim().startsWith('|'))
+      .map(l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()));
+    let lines = [];
+    if (rows.length > 1) {
+      const head = rows[0].map(c => c.toLowerCase());
+      let jo = head.findIndex(c => /jotsom|conlang|family/.test(c)), en = head.findIndex(c => /english|meaning|translation/.test(c));
+      if (jo < 0) { jo = head.length >= 3 ? 1 : 0; en = jo + 1; }
+      lines = rows.slice(1).filter(r => !/^-+$/.test(r[0]) && r[jo])
+        .map(r => ({ jo: r[jo].replace(/\*/g, ''), en: en >= 0 ? (r[en] || '').replace(/\*/g, '') : '' }));
+    }
+    if (!lines.length) {
+      lines = t.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#') && !/^(Owner|Last updated|Status):/i.test(l))
+        .map(l => { const [jo, en] = l.split(/\s+=\s+|\t/); return { jo: jo.replace(/\*/g, ''), en: (en || '').replace(/\*/g, '') }; });
+    }
+    return { title: title.replace(/\*/g, ''), lines };
+  }
+
+  function library() {
+    open = null; $('#title').textContent = 'Reader';
+    $('#app').innerHTML = `<div class="lib">${texts.map((t, i) => `<div class="card" data-i="${i}">
+        <div class="row"><b class="grow">${esc(t.title)}</b><span class="muted">${t.lines.length} lines</span>
+        <button class="chip" data-del="${i}" aria-label="Remove">×</button></div>
+        <div class="muted">${esc(t.lines[0]?.jo || '')}</div></div>`).join('')}</div>
+      ${texts.length ? '' : '<div class="empty-state"><p>No texts yet. Tap <b>Add text</b>.</p></div>'}
+      <p class="muted">Tap a text to read it. Tap any word for its meaning and endings. Story files from <code>canon/stories/</code> load straight in.</p>`;
+    $('#app').querySelectorAll('[data-i]').forEach(c => c.onclick = e => { if (!e.target.dataset.del) read(+c.dataset.i); });
+    $('#app').querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      if (confirm(`Remove “${texts[+b.dataset.del].title}”?`)) { texts.splice(+b.dataset.del, 1); saveTexts(); library(); } });
+  }
+
+  function read(i) {
+    open = i; const t = texts[i];
+    $('#title').textContent = t.title;
+    const hasEn = t.lines.some(l => l.en);
+    $('#app').innerHTML = `<div class="row" style="margin-bottom:6px"><button id="back" class="chip">← All texts</button>
+        <span class="grow"></span>${hasEn ? `<label class="chk"><input type="checkbox" id="all" ${showAll ? 'checked' : ''}> Show all English</label>` : ''}</div>
+      ${WL.words().length ? '' : '<p class="bad">Import the word list (Lookup page) so words can be looked up.</p>'}
+      ${t.lines.map((l, n) => `<div class="line"><div class="jo"><span class="num">${n + 1}</span>${WL.tappable(l.jo)}</div>
+        ${l.en ? `<div class="en ${showAll ? '' : 'hide'}" id="en${n}">${esc(l.en)}</div>
+        ${showAll ? '' : `<button class="peek chip" data-n="${n}">English</button>`}` : ''}</div>`).join('')}`;
+    // mark unknown words
+    if (WL.words().length) $('#app').querySelectorAll('.tw').forEach(s => { if (!WL.analyze(s.dataset.w).best && !/^\p{Lu}/u.test(s.dataset.w)) s.classList.add('unk'); });
+    $('#back').onclick = library;
+    if ($('#all')) $('#all').onchange = e => { showAll = e.target.checked; read(i); };
+    $('#app').querySelectorAll('.peek').forEach(b => b.onclick = () => { $('#en' + b.dataset.n).classList.toggle('hide'); });
+  }
+
+  $('#app').addEventListener('click', e => {
+    const tw = e.target.closest('.tw'); if (!tw) return;
+    if (!WL.words().length) return toast('Import the word list first');
+    $('#app').querySelectorAll('.tw.sel').forEach(x => x.classList.remove('sel'));
+    tw.classList.add('sel');
+    WL.wordSheet(tw.dataset.w);
+  });
+
+  $('#add').onclick = () => WL.importDialog({
+    title: 'Add a text', modes: false, accept: '.md,.txt',
+    help: 'A story .md (with a Jotsom | English table), or plain text, one sentence per line. Optional English after “ = ” or a tab.',
+    onText(t, name) {
+      const p = parseText(t, name);
+      if (!p.lines.length) { toast('No lines found'); return false; }
+      texts.unshift(p); saveTexts(); read(0); toast(`Added “${p.title}”`);
+    }
+  });
+  document.addEventListener('wl:words', () => open != null ? read(open) : library());
+  library();
+})();
+</script>
+</body>
+</html>
