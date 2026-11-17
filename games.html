@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Kids Word Games</title>
+<link rel="stylesheet" href="core.css">
+<style>
+  :root { --sun: #ffb703; --sky: #8ecae6; --pop: #fb8500; --kid-bg: #fff8e7; }
+  @media (prefers-color-scheme: dark) { :root { --kid-bg: #1f1c16; } }
+  html, body { background: var(--kid-bg); min-height: 100%; }
+  header.top { background: var(--kid-bg); }
+  main { padding-bottom: 40px; }
+  .kidbtn { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; font-size: 22px; font-weight: 800;
+    padding: 18px 16px; border-radius: 22px; border: 3px solid var(--line); background: var(--panel); margin-bottom: 12px; }
+  .kidbtn .ic { font-size: 44px; line-height: 1; }
+  .kidbtn small { display: block; font-size: 14px; font-weight: 500; color: var(--muted); }
+  .kidbtn.g1 { border-color: #f4a261; } .kidbtn.g2 { border-color: #8ecae6; } .kidbtn.g3 { border-color: #b5e48c; }
+  .players { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 10px; }
+  .player { flex: none; text-align: center; border: 3px solid transparent; border-radius: 18px; padding: 6px 10px; background: var(--panel); min-width: 74px; }
+  .player .av { font-size: 34px; display: block; }
+  .player .nm { font-size: 14px; font-weight: 700; }
+  .player[aria-pressed=true] { border-color: var(--pop); }
+  .hud { display: flex; justify-content: space-between; align-items: center; font-size: 20px; font-weight: 800; margin: 4px 0 10px; }
+  .prog { display: flex; gap: 5px; }
+  .prog i { width: 14px; height: 14px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .prog i.ok { background: var(--sun); }
+  .prompt { text-align: center; background: var(--panel); border-radius: 24px; padding: 22px 10px; margin-bottom: 14px; border: 3px solid var(--line); }
+  .prompt .word { font-size: 46px; font-weight: 900; letter-spacing: .5px; }
+  .prompt .pic { font-size: 120px; line-height: 1.1; }
+  .prompt img.pic { width: 180px; height: 180px; object-fit: cover; border-radius: 18px; }
+  .opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .opts.words { grid-template-columns: 1fr; }
+  .opt { background: var(--panel); border: 3px solid var(--line); border-radius: 22px; padding: 10px 4px; min-height: 110px;
+    display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800; cursor: pointer; }
+  .opts.words .opt { min-height: 70px; }
+  .opt .pic { font-size: 64px; line-height: 1; }
+  .opt img.pic { width: 92px; height: 92px; object-fit: cover; border-radius: 14px; }
+  .opt.right { border-color: #2a9d8f; background: #d8f3dc; animation: bounce .5s; }
+  .opt.wrong { opacity: .35; animation: wobble .4s; }
+  @media (prefers-color-scheme: dark) { .opt.right { background: #1b4332; } }
+  @keyframes bounce { 0%,100% { transform: scale(1) } 40% { transform: scale(1.15) } 70% { transform: scale(.95) } }
+  @keyframes wobble { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-8px) } 75% { transform: translateX(8px) } }
+  .say { text-align: center; font-size: 30px; font-weight: 900; min-height: 44px; margin-top: 12px; }
+  .say span { display: inline-block; animation: bounce .5s; }
+  /* memory */
+  .mem { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; perspective: 600px; }
+  .card3 { aspect-ratio: 3/4; position: relative; cursor: pointer; transform-style: preserve-3d; transition: transform .35s; }
+  .card3.up, .card3.done { transform: rotateY(180deg); }
+  .card3 .f, .card3 .b { position: absolute; inset: 0; border-radius: 14px; backface-visibility: hidden; display: flex; align-items: center; justify-content: center; }
+  .card3 .b { background: linear-gradient(135deg, var(--sun), var(--pop)); font-size: 30px; }
+  .card3 .f { background: var(--panel); border: 3px solid var(--line); transform: rotateY(180deg); font-size: 18px; font-weight: 800; text-align: center; padding: 2px; word-break: break-word; }
+  .card3 .f .pic { font-size: 42px; } .card3 .f img.pic { width: 90%; height: 90%; object-fit: cover; border-radius: 10px; }
+  .card3.done .f { border-color: #2a9d8f; animation: bounce .5s; }
+  /* reward */
+  .reward { text-align: center; padding: 20px 6px; }
+  .reward .big { font-size: 110px; animation: spin 1s ease-out; display: inline-block; }
+  @keyframes spin { from { transform: scale(0) rotate(-200deg) } to { transform: scale(1) rotate(0) } }
+  .book { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; font-size: 30px; }
+  /* confetti */
+  .conf { position: fixed; top: -20px; width: 10px; height: 14px; z-index: 60; pointer-events: none; border-radius: 2px; animation: fall linear forwards; }
+  @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+  /* grown-up picture manager */
+  .prow { display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .prow .pic { font-size: 40px; text-align: center; } .prow img.pic { width: 52px; height: 52px; object-fit: cover; border-radius: 10px; }
+  .mute { font-size: 22px; border: 0; background: none; }
+</style>
+</head>
+<body>
+<header class="top"><div class="row"><h1 class="grow">🎈 Word Games</h1><button class="mute" id="mute" aria-label="Sound on/off">🔊</button></div></header>
+<main id="app"></main>
+<input type="file" id="photo" accept="image/*" hidden>
+
+<script src="core.js"></script>
+<script src="pictures.js"></script>
+<script>
+(() => {
+  const { $, esc, store, toast } = WL;
+  const PKEY = 'wl.kids.players', MKEY = 'wl.kids.mute';
+  const AVATARS = ['🦊', '🐻', '🐰', '🐸', '🦁', '🐼', '🐯', '🦄', '🐙', '🐢', '🐧', '🐨'];
+  const STICKERS = ['🌟', '🚀', '🦋', '🌈', '🍭', '🎈', '🦖', '🏆', '🐳', '🌻', '🍉', '🎨', '🦄', '🐞', '🍩', '🎉', '🐬', '🌙', '⚽', '🧁'];
+  let players = store.get(PKEY, []), me = players[0]?.name || null;
+  let muted = store.get(MKEY, false);
+  let pool = [];          // [{ w, p }] words that have a picture
+  const ROUND = 8;
+
+  // ---------- sound (made in the browser, no files) ----------
+  let ac;
+  function tone(freq, start, dur, type = 'sine', vol = .18) {
+    if (muted) return;
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + start;
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + .02); g.gain.exponentialRampToValueAtTime(.001, t + dur);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + .05);
+  }
+  const sfx = {
+    yes() { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * .08, .25, 'triangle')); },
+    no() { tone(220, 0, .18, 'sine', .12); tone(185, .15, .25, 'sine', .12); },
+    flip() { tone(880, 0, .06, 'square', .05); },
+    win() { [523, 659, 784, 659, 784, 1047].forEach((f, i) => tone(f, i * .12, .3, 'triangle', .2)); },
+  };
+  function confetti(n = 40) {
+    const colors = ['#ffb703', '#fb8500', '#8ecae6', '#2a9d8f', '#e76f51', '#b5e48c', '#cdb4db'];
+    for (let i = 0; i < n; i++) {
+      const c = document.createElement('i'); c.className = 'conf';
+      c.style.left = Math.random() * 100 + 'vw'; c.style.background = colors[i % colors.length];
+      c.style.animationDuration = 1.2 + Math.random() * 1.3 + 's'; c.style.animationDelay = Math.random() * .3 + 's';
+      document.body.appendChild(c); setTimeout(() => c.remove(), 3000);
+    }
+  }
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const CHEERS = ['Yay! 🎉', 'Great! ⭐', 'You got it! 🙌', 'Super! 🌟', 'Wow! 🤩'];
+  const savePlayers = () => store.set(PKEY, players);
+  const player = () => players.find(p => p.name === me);
+
+  $('#mute').textContent = muted ? '🔇' : '🔊';
+  $('#mute').onclick = () => { muted = !muted; store.set(MKEY, muted); $('#mute').textContent = muted ? '🔇' : '🔊'; if (!muted) sfx.yes(); };
+
+  async function buildPool() {
+    const ws = WL.defined().filter(w => !/^(ending|prefix|particle|preposition|pronoun|conjunction|question word|demonstrative)$/i.test(w.pos));
+    const seen = new Set(); pool = [];
+    for (const w of ws) {
+      const p = await PICS.picFor(w);
+      if (!p) continue;
+      const key = p.kind === 'emoji' ? p.src : w.id;   // one word per emoji, so two answers never look the same
+      if (seen.has(key)) continue; seen.add(key);
+      pool.push({ w, p });
+    }
+  }
+
+  // ---------- home ----------
+  function home() {
+    if (!WL.words().length) { $('#app').innerHTML = WL.noWordsHTML(); return; }
+    $('#app').innerHTML = `
+      <div class="muted" style="font-weight:700">Who's playing?</div>
+      <div class="players">${players.map(p => `<button class="player" data-n="${esc(p.name)}" aria-pressed="${p.name === me}">
+          <span class="av">${p.avatar}</span><span class="nm">${esc(p.name)}</span><span class="muted" style="font-size:12px">${p.stickers.length} 🌟</span></button>`).join('')}
+        <button class="player" id="newP"><span class="av">➕</span><span class="nm">New</span></button></div>
+      <button class="kidbtn g1" data-g="find"><span class="ic">🔍</span><span>Find it!<small>Read (or hear) the word, tap the picture</small></span></button>
+      <button class="kidbtn g2" data-g="name"><span class="ic">🖼️</span><span>What is it?<small>See the picture, tap the word</small></span></button>
+      <button class="kidbtn g3" data-g="mem"><span class="ic">🃏</span><span>Memory<small>Match each picture with its word</small></span></button>
+      ${player() ? `<h2>${player().avatar} ${esc(me)}'s stickers</h2><div class="book">${player().stickers.join('') || '<span class="muted" style="font-size:15px">Play a game to win your first sticker!</span>'}</div>` : ''}
+      <p class="muted" style="margin-top:24px">${pool.length} words have pictures. <a href="#" id="grown">Grown-ups: add pictures</a></p>`;
+    $('#app').querySelectorAll('.player[data-n]').forEach(b => b.onclick = () => { me = b.dataset.n; home(); });
+    $('#newP').onclick = newPlayer;
+    $('#app').querySelectorAll('[data-g]').forEach(b => b.onclick = () => {
+      if (!player()) { newPlayer(); return; }
+      if (pool.length < 4) { toast('Need at least 4 words with pictures'); return; }
+      ac = ac || (!muted && new (window.AudioContext || window.webkitAudioContext)()); // unlock sound on iPhone
+      ({ find: () => quiz('find'), name: () => quiz('name'), mem: memory })[b.dataset.g]();
+    });
+    $('#grown').onclick = e => { e.preventDefault(); pictures(); };
+  }
+  function newPlayer() {
+    $('#app').innerHTML = `<h2>What's your name?</h2>
+      <input id="pn" type="text" placeholder="Name" style="width:100%; font-size:22px">
+      <h2>Pick your animal</h2>
+      <div class="players" style="flex-wrap:wrap">${AVATARS.map((a, i) => `<button class="player" data-a="${a}" aria-pressed="${i === 0}"><span class="av">${a}</span></button>`).join('')}</div>
+      <button class="kidbtn g3" id="ok" style="justify-content:center">Let's go! 🎉</button>
+      <button class="chip" id="cancel">Back</button>`;
+    let av = AVATARS[0];
+    $('#app').querySelectorAll('[data-a]').forEach(b => b.onclick = () => { av = b.dataset.a; $('#app').querySelectorAll('[data-a]').forEach(x => x.setAttribute('aria-pressed', x === b)); });
+    $('#ok').onclick = () => {
+      const n = $('#pn').value.trim(); if (!n) { $('#pn').focus(); return; }
+      if (!players.find(p => p.name === n)) players.push({ name: n, avatar: av, stickers: [] });
+      me = n; savePlayers(); home();
+    };
+    $('#cancel').onclick = home;
+    $('#pn').focus();
+  }
+
+  // ---------- Find it! / What is it? ----------
+  function quiz(mode) {
+    const qs = shuffle([...pool]).slice(0, Math.min(ROUND, pool.length));
+    let i = 0, score = 0, firstTry = true;
+    const marks = [];
+    function ask() {
+      if (i >= qs.length) return reward(score, qs.length);
+      const q = qs[i]; firstTry = true;
+      const opts = shuffle([q, ...shuffle(pool.filter(x => x !== q)).slice(0, 2)]);
+      $('#app').innerHTML = `
+        <div class="hud"><button class="chip" id="quit">✖</button><span class="prog">${qs.map((_, k) => `<i class="${marks[k] ? 'ok' : ''}"></i>`).join('')}</span><span>⭐ ${score}</span></div>
+        <div class="prompt">${mode === 'find' ? `<div class="word">${esc(q.w.word)}</div>` : PICS.picHTML(q.p)}</div>
+        <div class="opts ${mode === 'name' ? 'words' : ''}">${opts.map(o => `<div class="opt" data-id="${esc(o.w.id)}">${mode === 'find' ? PICS.picHTML(o.p) : esc(o.w.word)}</div>`).join('')}</div>
+        <div class="say" id="say"></div>`;
+      $('#quit').onclick = home;
+      $('#app').querySelectorAll('.opt').forEach(el => el.onclick = () => {
+        if (el.classList.contains('wrong') || $('.opt.right')) return;
+        if (el.dataset.id === q.w.id) {
+          el.classList.add('right'); sfx.yes(); confetti(30);
+          if (firstTry) { score++; marks[i] = true; }
+          $('#say').innerHTML = `<span>${CHEERS[Math.floor(Math.random() * CHEERS.length)]}</span>`;
+          if (mode === 'name' || !firstTry) $('#say').innerHTML += `<div class="muted" style="font-size:18px">${esc(q.w.word)} = ${esc(PICS.firstGloss(q.w.meaning))}</div>`;
+          i++; setTimeout(ask, 1400);
+        } else {
+          el.classList.add('wrong'); sfx.no(); firstTry = false;
+          $('#say').innerHTML = '<span>Try again! 💪</span>';
+        }
+      });
+    }
+    ask();
+  }
+
+  // ---------- Memory ----------
+  function memory() {
+    const pairs = shuffle([...pool]).slice(0, Math.min(4, pool.length));
+    const cards = shuffle(pairs.flatMap(x => [{ x, side: 'pic' }, { x, side: 'word' }]));
+    let open = [], done = 0, tries = 0, lock = false;
+    $('#app').innerHTML = `<div class="hud"><button class="chip" id="quit">✖</button><span>Find the pairs!</span><span id="tries">🔁 0</span></div>
+      <div class="mem">${cards.map((c, k) => `<div class="card3" data-k="${k}"><div class="b">❓</div>
+        <div class="f">${c.side === 'pic' ? PICS.picHTML(c.x.p) : esc(c.x.w.word)}</div></div>`).join('')}</div>
+      <div class="say" id="say"></div>`;
+    $('#quit').onclick = home;
+    $('#app').querySelectorAll('.card3').forEach(el => el.onclick = () => {
+      if (lock || el.classList.contains('up') || el.classList.contains('done')) return;
+      el.classList.add('up'); sfx.flip(); open.push(el);
+      if (open.length < 2) return;
+      tries++; $('#tries').textContent = '🔁 ' + tries;
+      const [a, b] = open.map(e => cards[+e.dataset.k]);
+      if (a.x === b.x && a.side !== b.side) {
+        open.forEach(e => { e.classList.remove('up'); e.classList.add('done'); });
+        open = []; done++; sfx.yes(); confetti(20);
+        $('#say').innerHTML = `<span>${esc(a.x.w.word)}! ${CHEERS[done % CHEERS.length]}</span>`;
+        if (done === pairs.length) setTimeout(() => reward(Math.max(1, pairs.length * 2 - (tries - pairs.length)), pairs.length * 2), 1200);
+      } else {
+        lock = true; sfx.no();
+        setTimeout(() => { open.forEach(e => e.classList.remove('up')); open = []; lock = false; }, 900);
+      }
+    });
+  }
+
+  // ---------- reward ----------
+  function reward(score, max) {
+    const p = player(); const s = STICKERS[Math.floor(Math.random() * STICKERS.length)];
+    if (p) { p.stickers.push(s); savePlayers(); }
+    sfx.win(); confetti(90);
+    const stars = score / max >= .9 ? 3 : score / max >= .6 ? 2 : 1;
+    $('#app').innerHTML = `<div class="reward">
+      <div style="font-size:26px; font-weight:900">${'⭐'.repeat(stars)}</div>
+      <div style="font-size:26px; font-weight:900">You won a sticker${p ? ', ' + esc(p.name) : ''}!</div>
+      <div class="big">${s}</div>
+      <div class="book" style="margin:14px 0">${p ? p.stickers.slice(-30).join('') : ''}</div>
+      <button class="kidbtn g1" id="again" style="justify-content:center">Play again 🔁</button>
+      <button class="kidbtn g2" id="menu" style="justify-content:center">Pick a game 🏠</button></div>`;
+    $('#again').onclick = home; $('#menu').onclick = home;
+  }
+
+  // ---------- grown-ups: pictures ----------
+  let pending = null;
+  async function pictures(filter = 'things', q = '') {
+    const all = await PICS.loadAll();
+    const ws = WL.defined().filter(w => (filter === 'all' ? !/^(ending|prefix)$/i.test(w.pos) : filter === 'missing' ? !all[w.id] && !PICS.emojiFor(w) && /^noun/i.test(w.pos) : /^noun/i.test(w.pos))
+      && (!q || WL.fold(w.word + ' ' + w.meaning).includes(WL.fold(q))));
+    const own = Object.keys(all).length;
+    $('#app').innerHTML = `<div class="row" style="margin-bottom:8px"><button class="chip" id="back">← Games</button><span class="grow"></span>
+        <span class="muted">${own} own photo${own === 1 ? '' : 's'}</span></div>
+      <p class="muted">Emoji are added for you. Tap 📷 to use your own photo instead (taken or from the gallery). Photos are shrunk and kept on this phone.</p>
+      <div class="row" style="margin-bottom:8px">
+        <div class="seg" id="flt"><button data-f="things">Things</button><button data-f="missing">No picture</button><button data-f="all">All</button></div>
+        <input id="pq" type="search" placeholder="Search" class="grow" value="${esc(q)}"></div>
+      <div id="rows">${ws.slice(0, 300).map(w => {
+        const e = PICS.emojiFor(w), img = all[w.id];
+        return `<div class="prow"><div>${img ? `<img class="pic" src="${img}">` : `<span class="pic">${e || '—'}</span>`}</div>
+          <div><b>${esc(w.word)}</b> <span class="muted">${esc(w.meaning)}</span></div>
+          <div class="row" style="gap:4px"><button data-add="${esc(w.id)}">📷</button>${img ? `<button data-del="${esc(w.id)}">✕</button>` : ''}</div></div>`;
+      }).join('') || '<p class="muted">Nothing here.</p>'}</div>
+      ${ws.length > 300 ? `<p class="muted">Showing 300 of ${ws.length}. Search to find others.</p>` : ''}
+      <h2>Share pictures with another phone</h2>
+      <div class="row"><button id="exp">Save picture pack</button><button id="imp">Load picture pack</button></div>
+      <p class="muted">Or put the saved file in your GitHub repo as <code>pictures.json</code> (next to index.html) and every phone gets the pictures automatically.</p>`;
+    $('#flt').querySelectorAll('button').forEach(b => { b.setAttribute('aria-pressed', b.dataset.f === filter); b.onclick = () => pictures(b.dataset.f, $('#pq').value); });
+    let deb; $('#pq').oninput = e => { clearTimeout(deb); deb = setTimeout(() => pictures(filter, e.target.value).then(() => { const i = $('#pq'); i.focus(); i.setSelectionRange(99, 99); }), 300); };
+    $('#back').onclick = async () => { await buildPool(); home(); };
+    $('#rows').onclick = async e => {
+      const a = e.target.closest('[data-add]'), d = e.target.closest('[data-del]');
+      if (a) { pending = { id: a.dataset.add, filter, q }; $('#photo').click(); }
+      if (d) { await PICS.delPic(d.dataset.del); pictures(filter, q); }
+    };
+    $('#exp').onclick = async () => {
+      const pack = await PICS.loadAll();
+      if (!Object.keys(pack).length) return toast('No own photos yet');
+      WL.download('pictures.json', JSON.stringify(pack), 'application/json');
+    };
+    $('#imp').onclick = () => WL.importDialog({ title: 'Load picture pack', modes: false, accept: '.json',
+      help: 'Pick a <code>pictures.json</code> saved from another phone.',
+      async onText(t) { const pack = JSON.parse(t); let n = 0;
+        for (const [id, url] of Object.entries(pack)) if (/^data:image\//.test(url)) { await PICS.setPic(id, url); n++; }
+        toast(`Added ${n} pictures`); pictures(filter, q); } });
+  }
+  $('#photo').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f || !pending) return;
+    try { await PICS.setPic(pending.id, await PICS.shrink(f)); toast('Picture saved'); }
+    catch (err) { toast('Could not use that picture'); }
+    pictures(pending.filter, pending.q);
+  };
+
+  async function start() { await PICS.loadPack(); await buildPool(); home(); }
+  document.addEventListener('wl:words', start);
+  start();
+})();
+</script>
+</body>
+</html>

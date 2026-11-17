@@ -305,7 +305,7 @@
   }
   const TOOLS = [
     ['index.html', 'Lookup'], ['flashcards.html', 'Cards'], ['quiz.html', 'Quiz'],
-    ['glosser.html', 'Gloss'], ['builder.html', 'Build'], ['phrasebook.html', 'Phrases'], ['reader.html', 'Read'],
+    ['glosser.html', 'Gloss'], ['builder.html', 'Build'], ['phrasebook.html', 'Phrases'], ['reader.html', 'Read'], ['games.html', '🎈 Kids'],
   ];
   function nav() {
     const here = location.pathname.split('/').pop() || 'index.html';
@@ -402,6 +402,30 @@
     }
     return out + esc(text.slice(last));
   }
+
+  // ---------- auto-load a word list file sitting next to the pages ----------
+  // When the tools are served (GitHub Pages etc.), every page checks for wordlist.txt / words.json.
+  // If the file changed since last time, it replaces the stored list. Opened as file://, browsers block this.
+  function hash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = (h * 33 ^ s.charCodeAt(i)) >>> 0; return h.toString(36) + ':' + s.length; }
+  async function autoload() {
+    if (location.protocol === 'file:') return;
+    for (const f of ['wordlist.txt', 'words.json']) {
+      try {
+        const r = await fetch(f, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const text = await r.text();
+        const h = hash(text);
+        if (lib.srcHash === h && lib.words.length) return;
+        const w = parseWordList(text);
+        if (!w.length) continue;
+        setWords(w, 'replace', '');
+        lib.srcHash = h; store.set(KEY, { ...lib, words: lib.words.map(({ id, word, ipa, pos, meaning }) => ({ id, word, ipa, pos, meaning })) });
+        toast(`Word list updated (${w.length} words)`);
+        return;
+      } catch {}
+    }
+  }
+  setTimeout(autoload, 0);
 
   window.WL = {
     store, fold, soundKey, esc, $, $$, isVowel,

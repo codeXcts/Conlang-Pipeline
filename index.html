@@ -75,7 +75,7 @@
 </head>
 <body>
 <header>
-  <nav class="tools"><a href="index.html" class="on">Lookup</a><a href="flashcards.html">Cards</a><a href="quiz.html">Quiz</a><a href="glosser.html">Gloss</a><a href="builder.html">Build</a><a href="phrasebook.html">Phrases</a><a href="reader.html">Read</a></nav>
+  <nav class="tools"><a href="index.html" class="on">Lookup</a><a href="flashcards.html">Cards</a><a href="quiz.html">Quiz</a><a href="glosser.html">Gloss</a><a href="builder.html">Build</a><a href="phrasebook.html">Phrases</a><a href="reader.html">Read</a><a href="games.html">🎈 Kids</a></nav>
   <div class="row" style="margin-bottom:8px">
     <h1 id="title">Word Lookup</h1>
     <span id="count"></span>
@@ -128,6 +128,7 @@
 
 <div id="toast"></div>
 
+<script src="core.js"></script>
 <script>
 (() => {
   const KEY = 'wordlookup.v1';
@@ -456,20 +457,10 @@
     if (e.key === '/' && document.activeElement !== $('#q') && !dlg.open) { e.preventDefault(); $('#q').focus(); }
   });
 
-  // Optional: auto-load words.json / wordlist.txt sitting next to index.html (works when served, e.g. GitHub Pages)
-  async function autoload() {
-    if (lib.words.length || location.protocol === 'file:') return;
-    for (const f of ['words.json', 'wordlist.txt']) {
-      try {
-        const r = await fetch(f, { cache: 'no-store' });
-        if (!r.ok) continue;
-        const words = parse(await r.text());
-        if (words.length) { setWords(words, 'replace', ''); toast(`Loaded ${f}`); return; }
-      } catch {}
-    }
-  }
+  // wordlist.txt / words.json next to the pages is auto-loaded by core.js; pick up its result here.
+  document.addEventListener('wl:words', () => { lib = store.get(KEY, lib); index(); buildPos(); render(true); });
 
-  index(); buildPos(); render(true); autoload();
+  index(); buildPos(); render(true);
 })();
 </script>
 </body>
