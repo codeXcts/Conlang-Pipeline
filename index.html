@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="build" content="build 2026-11-16-2041">
+<meta name="build" content="build 2026-11-16-2338">
 <title>Conlang Pipeline</title>
 <style>
 :root{
@@ -247,11 +247,11 @@ dl.kv dt{color:var(--muted)}dl.kv dd{margin:0}
 <script>
 "use strict";
 /* ============================================================
-   Conlang Pipeline — build 2026-11-16-2041 (made on build 2026-11-15-0021)
+   Conlang Pipeline — build 2026-11-16-2338 (made on build 2026-11-16-2041)
    Fully offline. No network calls, no accounts, no AI.
    ============================================================ */
-const BUILD = "build 2026-11-16-2041";
-const BASE_BUILD = "build 2026-11-15-0021";
+const BUILD = "build 2026-11-16-2338";
+const BASE_BUILD = "build 2026-11-16-2041";
 const FORMAT = "conlang-pipeline";
 const VERSION = 7;
 const STORE_KEY = "conlang-pipeline:autosave";
@@ -1672,16 +1672,18 @@ function nearTwinsOf(lang, entry) {
   return lang.lexicon.filter(w => isObj(w) && w !== entry && w.status !== "vetoed" && nearTwin(mine, segmentWord(w.surface, segEnv)));
 }
 /* Meaning sheet: plain text for an AI chat. One row per word: word id | word | part of speech | meaning. */
-function meaningSheetText(lang) {
+// which (Chilly, 2026-11-16; build 2026-11-16-2338): "all" words, only those "with" a meaning, or only those "without" one.
+function meaningSheetText(lang, which) {
+  which = which || "all";
   const slots = new Map(lang.meanings.map(m => [m.id, m]));
   // Shortest first (by sounds in the modern form), so short words can go to the most-used meanings.
   const env = langEnv(lang), segEnv = envWith(env, [...env.symbols, ...CAT.keys()]), len = new Map();
-  const words = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed");
+  const words = lang.lexicon.filter(w => isObj(w) && w.status !== "vetoed" && (which === "all" || (which === "with") === slots.has(w.slot)));
   for (const w of words) len.set(w, segmentWord(w.surface, segEnv).length);
   words.sort((a, b) => len.get(a) - len.get(b) || a.id.localeCompare(b.id));
   const posL = id => (lang.partsOfSpeech[id] && lang.partsOfSpeech[id].label) || id || "";
   const lines = [
-    `# Meaning sheet for ${lang.language.name || "my conlang"}. One row per word, shortest words first.`,
+    `# Word list for ${lang.language.name || "my conlang"}: ${which === "with" ? "only words that have a meaning" : which === "without" ? "only words without a meaning" : "all words"}, one row per word, shortest first.`,
     "# Columns: word id | word (spelling /pronunciation/) | part of speech | meaning",
     "# Keep the word id. Send back only the rows you change; rows left out stay as they are.",
     "# A blank meaning clears that word's meaning. Changing the word (spelling /ipa/) changes the word itself.",
@@ -3091,10 +3093,13 @@ if (typeof document !== "undefined") (function () {
   }
   // mode "out": export only; "in": upload only; none (menu): both.
   function openMeaningSheet(mode) {
-    const text = meaningSheetText(lang), rows = text.split("\n").filter(l => /^w\d+ \|/.test(l)).length;
+    let which = "all", text = meaningSheetText(lang, which);
+    const countRows = t => t.split("\n").filter(l => /^w\d+ \|/.test(l)).length, rows = countRows(text);
     const out = mode !== "in", inn = mode !== "out";
     openSheet(`<h2>${mode === "out" ? "Export word list" : mode === "in" ? "Upload word list" : "Word list"}</h2>
-      ${out ? `<p class="muted small" style="margin:0 0 6px">Your ${rows} words, shortest first, for an AI chat (or you) to fill in part of speech and meaning. Uploading it back changes meanings, parts of speech and any word you respelled.</p>
+      ${out ? `<p class="muted small" style="margin:0 0 6px">Your words, shortest first, for an AI chat (or you) to fill in part of speech and meaning. Uploading it back changes meanings, parts of speech and any word you respelled.</p>
+      <div class="seg" role="group" aria-label="Which words"><button data-x="wall" class="on">All</button><button data-x="wwith">With a meaning</button><button data-x="wwithout">Without one</button></div>
+      <p class="muted small" id="msCount" style="margin:6px 0">${rows} word${rows === 1 ? "" : "s"}</p>
       <textarea id="msOut" readonly rows="7" class="sheettext">${esc(text)}</textarea>
       <div class="toolbar"><button class="btn" data-x="copy">Copy</button><button class="btn" data-x="dl">Download .txt</button></div>` : ""}
       ${inn ? `${out ? "<h3>Bring changes back</h3>" : `<p class="muted small" style="margin:0 0 6px">Paste the changed rows (only those are needed) or choose the file, then Check to see what would change. Per row: a new meaning is set, a blank meaning clears it, a changed word (spelling /ipa/) changes the word. Words not in the list stay as they are.</p>`}
@@ -3106,13 +3111,20 @@ if (typeof document !== "undefined") (function () {
       const x = ev.target.closest("[data-x]"); if (!x) return;
       const a = x.dataset.x;
       if (a === "close") return closeSheet();
+      if (a === "wall" || a === "wwith" || a === "wwithout") {
+        which = a.slice(1) === "all" ? "all" : a === "wwith" ? "with" : "without";
+        text = meaningSheetText(lang, which); $("msOut").value = text;
+        const n = countRows(text); $("msCount").textContent = `${n} word${n === 1 ? "" : "s"}`;
+        x.parentNode.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === x));
+        return;
+      }
       if (a === "copy") {
         const done = () => toast("Copied");
         try { navigator.clipboard.writeText(text).then(done, () => { $("msOut").select(); toast("Select-all is on; copy it from there"); }); }
         catch (e) { $("msOut").select(); toast("Select-all is on; copy it from there"); }
         return;
       }
-      if (a === "dl") { const d = new Date(), pad = n => String(n).padStart(2, "0"); downloadText(text, `${(lang.language.name || "language").toLowerCase().replace(/[^\w-]+/g, "-")}-meanings-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.txt`); return; }
+      if (a === "dl") { const d = new Date(), pad = n => String(n).padStart(2, "0"); downloadText(text, `${(lang.language.name || "language").toLowerCase().replace(/[^\w-]+/g, "-")}-words${which === "all" ? "" : which === "with" ? "-with-meanings" : "-without-meanings"}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.txt`); return; }
       if (a === "file") { $("msFile").click(); return; }
       if (a === "check") {
         const { next, st } = mergeMeaningSheet(lang, $("msIn").value);
