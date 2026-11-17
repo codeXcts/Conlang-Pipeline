@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b1f24">
+<title>Word Lookup</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f22; --muted: #6b6f76;
+    --line: #e2e0db; --accent: #2f6f5e; --accent-soft: #e3efe9; --hl: #fff1b8;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --panel: #1d2126; --ink: #e9e7e3; --muted: #9aa0a8;
+      --line: #2c3138; --accent: #6cc4a8; --accent-soft: #20352f; --hl: #5a4b12;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
+  #count { color: var(--muted); font-size: 13px; }
+  input[type=search], select {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+  #q { flex: 1; min-width: 0; font-size: 17px; }
+  select { padding: 8px 10px; font-size: 14px; }
+  button { font: inherit; font-size: 14px; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 7px 10px; }
+  .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  label.chk { font-size: 13px; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; }
+  main { padding: 10px 14px 80px; max-width: 820px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .w { font-size: 19px; font-weight: 600; }
+  .ipa { color: var(--muted); font-size: 14px; margin-left: 6px; font-weight: 400; }
+  .m { grid-column: 1 / -1; }
+  .m.empty { color: var(--muted); font-style: italic; }
+  .meta { display: flex; gap: 6px; align-items: start; }
+  .pos { font-size: 12px; background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+  .id { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .star { border: 0; background: none; padding: 0 2px; font-size: 18px; color: var(--muted); line-height: 1; }
+  .star.on { color: #e0a400; }
+  mark { background: var(--hl); color: inherit; border-radius: 3px; }
+  .empty-state { text-align: center; color: var(--muted); padding: 40px 10px; }
+  .empty-state p { margin: 6px 0; }
+  dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+    color: var(--ink); width: min(560px, 94vw); padding: 16px; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  textarea { width: 100%; min-height: 160px; font: 13px ui-monospace, monospace; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 14px; text-align: center; margin: 10px 0; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px;
+    font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #more { display: block; margin: 10px auto; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row" style="margin-bottom:8px">
+    <h1 id="title">Word Lookup</h1>
+    <span id="count"></span>
+    <button id="randomBtn" title="Random word">🎲</button>
+    <button id="menuBtn" class="primary">Import</button>
+  </div>
+  <div class="row" style="margin-bottom:8px">
+    <input id="q" type="search" placeholder="Search a word or meaning…" autocomplete="off" autocapitalize="off" spellcheck="false">
+  </div>
+  <div class="row">
+    <div class="seg" role="group" aria-label="Search in">
+      <button data-dir="both" aria-pressed="true">Both</button>
+      <button data-dir="word" aria-pressed="false">Word</button>
+      <button data-dir="meaning" aria-pressed="false">Meaning</button>
+    </div>
+    <select id="pos"><option value="">All parts of speech</option></select>
+    <label class="chk"><input id="loose" type="checkbox" checked> Ignore accents</label>
+    <label class="chk"><input id="hideBlank" type="checkbox" checked> Hide blank</label>
+    <label class="chk"><input id="starOnly" type="checkbox"> ★ only</label>
+  </div>
+</header>
+
+<main id="list"></main>
+
+<dialog id="dlg">
+  <h3 style="margin-top:0">Import word list</h3>
+  <p class="muted">Accepts the app's meaning sheet (<code>id | word /ipa/ | part of speech | meaning</code>), CSV, TSV, or JSON. Lines starting with <code>#</code> are skipped.</p>
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".txt,.csv,.tsv,.json,.md,text/*,application/json">
+    <div class="muted">or drop a file here</div>
+  </div>
+  <textarea id="paste" placeholder="…or paste the list here"></textarea>
+  <div class="row" style="margin-top:10px">
+    <label class="chk"><input type="radio" name="mode" value="replace" checked> Replace current list</label>
+    <label class="chk"><input type="radio" name="mode" value="merge"> Merge (update by id)</label>
+  </div>
+  <div class="row" style="margin-top:12px; justify-content:space-between">
+    <div class="row">
+      <button id="exportJson">Export JSON</button>
+      <button id="exportTxt">Export sheet</button>
+      <button id="clearAll">Clear</button>
+    </div>
+    <div class="row">
+      <button id="cancel">Close</button>
+      <button id="doImport" class="primary">Import</button>
+    </div>
+  </div>
+  <p class="muted" id="libInfo" style="margin-bottom:0"></p>
+</dialog>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  const KEY = 'wordlookup.v1';
+  const STAR_KEY = 'wordlookup.stars.v1';
+  const PAGE = 200;
+
+  // ---------- storage (wrapped: some contexts throw) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
+  };
+
+  let lib = store.get(KEY, { name: '', words: [], importedAt: null });
+  let stars = new Set(store.get(STAR_KEY, []));
+  let dir = 'both';
+  let shown = PAGE;
+
+  // ---------- text helpers ----------
+  const fold = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+  // ---------- parsing ----------
+  function splitWordIpa(s) {
+    const m = s.match(/^(.*?)\s*\/([^/]*)\/\s*$/);
+    return m ? { word: m[1].trim(), ipa: m[2].trim() } : { word: s.trim(), ipa: '' };
+  }
+
+  function parseCSVLine(line, sep) {
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+        else if (c === '"') q = false;
+        else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === sep) { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  }
+
+  const HEAD = {
+    id: ['word id', 'id', 'wid'],
+    word: ['word', 'conlang', 'lemma', 'headword', 'spelling'],
+    ipa: ['ipa', 'pronunciation', 'pron'],
+    pos: ['part of speech', 'pos', 'class', 'type'],
+    meaning: ['meaning', 'gloss', 'definition', 'english', 'translation']
+  };
+  function mapHeader(cells) {
+    const low = cells.map(c => c.toLowerCase().trim());
+    const idx = {};
+    for (const [k, names] of Object.entries(HEAD)) {
+      const i = low.findIndex(c => names.includes(c));
+      if (i >= 0) idx[k] = i;
+    }
+    return (idx.word !== undefined) ? idx : null;
+  }
+
+  function rowsToWords(rows) {
+    if (!rows.length) return [];
+    let idx = mapHeader(rows[0]);
+    let body = rows;
+    if (idx) body = rows.slice(1);
+    else if (rows[0].length >= 4) idx = { id: 0, word: 1, pos: 2, meaning: 3 };
+    else if (rows[0].length === 3) idx = { word: 0, pos: 1, meaning: 2 };
+    else idx = { word: 0, meaning: 1 };
+    const words = [];
+    body.forEach((r, n) => {
+      const get = k => idx[k] !== undefined ? (r[idx[k]] || '').trim() : '';
+      let { word, ipa } = splitWordIpa(get('word'));
+      if (!ipa) ipa = get('ipa').replace(/^\/|\/$/g, '');
+      if (!word) return;
+      words.push({ id: get('id') || ('r' + (n + 1)), word, ipa, pos: get('pos'), meaning: get('meaning') });
+    });
+    return words;
+  }
+
+  function parse(text) {
+    text = text.replace(/^﻿/, '').trim();
+    if (!text) return [];
+    if (/^[\[{]/.test(text)) {
+      const data = JSON.parse(text);
+      const arr = Array.isArray(data) ? data : (data.words || data.entries || []);
+      return arr.map((o, n) => {
+        const g = (...ks) => { for (const k of ks) if (o[k] != null) return String(o[k]); return ''; };
+        let { word, ipa } = splitWordIpa(g('word', 'conlang', 'lemma', 'headword'));
+        ipa = ipa || g('ipa', 'pronunciation').replace(/^\/|\/$/g, '');
+        return { id: g('id', 'wordId', 'word_id') || ('r' + (n + 1)), word, ipa,
+          pos: g('pos', 'partOfSpeech', 'part_of_speech', 'class'),
+          meaning: g('meaning', 'gloss', 'definition', 'english') };
+      }).filter(w => w.word);
+    }
+    const lines = text.split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith('#'));
+    const sample = lines.slice(0, 5).join('\n');
+    let sep = '|';
+    if (!sample.includes('|')) sep = sample.includes('\t') ? '\t' : ',';
+    const rows = lines.map(l => sep === '|' ? l.split('|').map(s => s.trim()) : parseCSVLine(l, sep));
+    return rowsToWords(rows);
+  }
+
+  // ---------- library ops ----------
+  function save() {
+    if (!store.set(KEY, lib)) toast('Could not save — list will reset on reload');
+  }
+  function setWords(words, mode, name) {
+    if (mode === 'merge' && lib.words.length) {
+      const map = new Map(lib.words.map(w => [w.id, w]));
+      for (const w of words) {
+        const old = map.get(w.id);
+        // keep old meaning/pos if the new row is blank there
+        map.set(w.id, old ? { ...old, ...Object.fromEntries(Object.entries(w).filter(([, v]) => v)) } : w);
+      }
+      lib.words = [...map.values()];
+    } else lib.words = words;
+    if (name) lib.name = name;
+    lib.importedAt = new Date().toISOString();
+    index(); save(); buildPos(); render(true);
+  }
+
+  function index() {
+    for (const w of lib.words) {
+      w._w = w.word.toLowerCase(); w._wf = fold(w.word);
+      w._m = w.meaning.toLowerCase(); w._mf = fold(w.meaning);
+    }
+  }
+
+  // ---------- search & ranking ----------
+  function score(w, q, loose) {
+    const W = loose ? w._wf : w._w, M = loose ? w._mf : w._m;
+    let s = 0;
+    if (dir !== 'meaning') {
+      if (W === q) s = Math.max(s, 100);
+      else if (W.startsWith(q)) s = Math.max(s, 80);
+      else if (W.includes(q)) s = Math.max(s, 50);
+    }
+    if (dir !== 'word' && M) {
+      const parts = M.split(/[,;()]/).map(p => p.trim().replace(/^to /, ''));
+      if (parts.includes(q)) s = Math.max(s, 95);
+      else if (new RegExp('(^|[^\\p{L}])' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^\\p{L}]|$)', 'u').test(M)) s = Math.max(s, 70);
+      else if (M.includes(q)) s = Math.max(s, 40);
+    }
+    return s;
+  }
+
+  function results() {
+    const loose = $('#loose').checked;
+    const raw = $('#q').value.trim();
+    const q = loose ? fold(raw) : raw.toLowerCase();
+    const pos = $('#pos').value;
+    const hideBlank = $('#hideBlank').checked;
+    const starOnly = $('#starOnly').checked;
+    let out = [];
+    for (const w of lib.words) {
+      if (hideBlank && !w.meaning) continue;
+      if (pos && w.pos.toLowerCase() !== pos) continue;
+      if (starOnly && !stars.has(w.id)) continue;
+      if (!q) { out.push([0, w]); continue; }
+      const s = score(w, q, loose);
+      if (s) out.push([s, w]);
+    }
+    out.sort((a, b) => b[0] - a[0] || a[1].word.length - b[1].word.length || a[1].word.localeCompare(b[1].word));
+    return out.map(x => x[1]);
+  }
+
+  // ---------- rendering ----------
+  const $ = s => document.querySelector(s);
+
+  function highlight(text, raw) {
+    if (!raw) return esc(text);
+    const loose = $('#loose').checked;
+    const q = loose ? fold(raw) : raw.toLowerCase();
+    const hay = loose ? fold(text) : text.toLowerCase();
+    // fold() keeps 1 char per base char only if no combining marks were split out; map positions safely
+    if (hay.length !== text.length) {
+      const i = text.toLowerCase().indexOf(raw.toLowerCase());
+      if (i < 0) return esc(text);
+      return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + raw.length)) + '</mark>' + esc(text.slice(i + raw.length));
+    }
+    const i = hay.indexOf(q);
+    if (i < 0) return esc(text);
+    return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
+  }
+
+  function card(w, raw) {
+    const hw = dir !== 'meaning' ? highlight(w.word, raw) : esc(w.word);
+    const hm = w.meaning ? (dir !== 'word' ? highlight(w.meaning, raw) : esc(w.meaning)) : 'no meaning yet';
+    return `<div class="card">
+      <div class="w">${hw}${w.ipa ? `<span class="ipa">/${esc(w.ipa)}/</span>` : ''}</div>
+      <div class="meta">
+        ${w.pos ? `<span class="pos">${esc(w.pos)}</span>` : ''}
+        <button class="star ${stars.has(w.id) ? 'on' : ''}" data-id="${esc(w.id)}" aria-label="Star">${stars.has(w.id) ? '★' : '☆'}</button>
+      </div>
+      <div class="m ${w.meaning ? '' : 'empty'}">${hm}</div>
+      <div class="id">${esc(w.id)}</div>
+    </div>`;
+  }
+
+  function render(reset) {
+    if (reset) shown = PAGE;
+    const list = $('#list');
+    if (!lib.words.length) {
+      list.innerHTML = `<div class="empty-state"><p style="font-size:40px">📖</p>
+        <p><b>No words loaded yet.</b></p><p>Tap <b>Import</b> to load your word list.</p></div>`;
+      $('#count').textContent = '';
+      return;
+    }
+    const res = results();
+    const raw = $('#q').value.trim();
+    const defined = lib.words.filter(w => w.meaning).length;
+    $('#count').textContent = `${res.length} shown · ${defined}/${lib.words.length} defined`;
+    if (!res.length) {
+      list.innerHTML = `<div class="empty-state"><p>No match for “${esc(raw)}”.</p>
+        <p class="muted">Try “Both”, untick “Hide blank”, or turn on “Ignore accents”.</p></div>`;
+      return;
+    }
+    list.innerHTML = res.slice(0, shown).map(w => card(w, raw)).join('') +
+      (res.length > shown ? `<button id="more">Show more (${res.length - shown} left)</button>` : '');
+  }
+
+  function buildPos() {
+    const sel = $('#pos'), cur = sel.value;
+    const set = [...new Set(lib.words.map(w => w.pos.toLowerCase()).filter(Boolean))].sort();
+    sel.innerHTML = '<option value="">All parts of speech</option>' +
+      set.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    if (set.includes(cur)) sel.value = cur;
+    $('#title').textContent = lib.name || 'Word Lookup';
+    $('#libInfo').textContent = lib.words.length
+      ? `Loaded: ${lib.words.length} words${lib.importedAt ? ' · imported ' + new Date(lib.importedAt).toLocaleString() : ''}`
+      : 'Nothing loaded.';
+  }
+
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  function download(name, text, type) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+
+  // ---------- events ----------
+  let deb;
+  $('#q').addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => render(true), 80); });
+  ['#pos', '#loose', '#hideBlank', '#starOnly'].forEach(s => $(s).addEventListener('change', () => render(true)));
+  document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+    dir = b.dataset.dir;
+    document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    render(true);
+  }));
+
+  $('#list').addEventListener('click', e => {
+    if (e.target.id === 'more') { shown += PAGE; render(false); return; }
+    const s = e.target.closest('.star');
+    if (s) {
+      const id = s.dataset.id;
+      stars.has(id) ? stars.delete(id) : stars.add(id);
+      store.set(STAR_KEY, [...stars]);
+      s.classList.toggle('on'); s.textContent = stars.has(id) ? '★' : '☆';
+      if ($('#starOnly').checked) render(false);
+    }
+  });
+
+  $('#randomBtn').addEventListener('click', () => {
+    const pool = lib.words.filter(w => w.meaning);
+    if (!pool.length) return toast('No defined words yet');
+    const w = pool[Math.floor(Math.random() * pool.length)];
+    $('#q').value = w.word;
+    dir = 'word';
+    document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x.dataset.dir === 'word'));
+    render(true);
+  });
+
+  const dlg = $('#dlg');
+  $('#menuBtn').addEventListener('click', () => { buildPos(); dlg.showModal(); });
+  $('#cancel').addEventListener('click', () => dlg.close());
+
+  let pendingName = '';
+  async function readFile(f) {
+    pendingName = f.name.replace(/\.[^.]+$/, '');
+    $('#paste').value = await f.text();
+    toast(`Loaded ${f.name} — tap Import`);
+  }
+  $('#file').addEventListener('change', e => e.target.files[0] && readFile(e.target.files[0]));
+  const drop = $('#drop');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('over');
+    e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]);
+  });
+
+  $('#doImport').addEventListener('click', () => {
+    try {
+      const words = parse($('#paste').value);
+      if (!words.length) return toast('No words found in that text');
+      const mode = document.querySelector('input[name=mode]:checked').value;
+      setWords(words, mode, pendingName);
+      $('#paste').value = ''; $('#file').value = ''; pendingName = '';
+      dlg.close();
+      toast(`Imported ${words.length} words`);
+    } catch (err) { toast('Import failed: ' + err.message); }
+  });
+
+  $('#exportJson').addEventListener('click', () => {
+    const clean = lib.words.map(({ id, word, ipa, pos, meaning }) => ({ id, word, ipa, pos, meaning }));
+    download((lib.name || 'wordlist') + '.json', JSON.stringify({ name: lib.name, words: clean }, null, 2), 'application/json');
+  });
+  $('#exportTxt').addEventListener('click', () => {
+    const lines = ['word id | word | part of speech | meaning',
+      ...lib.words.map(w => `${w.id} | ${w.word}${w.ipa ? ` /${w.ipa}/` : ''} | ${w.pos} | ${w.meaning}`)];
+    download((lib.name || 'wordlist') + '.txt', lines.join('\n') + '\n', 'text/plain');
+  });
+  $('#clearAll').addEventListener('click', () => {
+    if (!lib.words.length) return;
+    lib = { name: '', words: [], importedAt: null }; save(); buildPos(); render(true);
+    toast('List cleared');
+  });
+
+  // Keyboard: "/" focuses search
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement !== $('#q') && !dlg.open) { e.preventDefault(); $('#q').focus(); }
+  });
+
+  // Optional: auto-load words.json / wordlist.txt sitting next to index.html (works when served, e.g. GitHub Pages)
+  async function autoload() {
+    if (lib.words.length || location.protocol === 'file:') return;
+    for (const f of ['words.json', 'wordlist.txt']) {
+      try {
+        const r = await fetch(f, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const words = parse(await r.text());
+        if (words.length) { setWords(words, 'replace', ''); toast(`Loaded ${f}`); return; }
+      } catch {}
+    }
+  }
+
+  index(); buildPos(); render(true); autoload();
+})();
+</script>
+</body>
+</html>
