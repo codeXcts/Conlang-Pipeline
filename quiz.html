@@ -256,7 +256,7 @@
     return b;
   }
 
-  const allPhrases = () => [...PHRASES.load().filter(p => p.cat !== 'Pet names'), ...SENTENCES.load()];
+  const allPhrases = () => [...(window.PHRASES ? PHRASES.load().filter(p => p.cat !== 'Pet names') : []), ...(window.SENTENCES ? SENTENCES.load() : [])];
   let sentencesFresh = false;
   function phrasePool() {
     const all = allPhrases().filter(p => toks(p.phrase).length >= 1);
@@ -273,7 +273,7 @@
   let inPhrase = false;
   function phraseSetup() {
     inPhrase = true;
-    if (!sentencesFresh) { sentencesFresh = true; SENTENCES.refresh().then(() => { if ($('#pgo')) phraseSetup(); }); }
+    if (!sentencesFresh && window.SENTENCES) { sentencesFresh = true; SENTENCES.refresh().then(() => { if ($('#pgo')) phraseSetup(); }); }
     const all = allPhrases();
     const cats = [...new Set(all.map(p => p.cat))];
     const pbCats = cats.filter(c => !/^Level|^Sentences/.test(c)), sCats = cats.filter(c => /^Level|^Sentences/.test(c));
@@ -282,6 +282,7 @@
     const pool = phrasePool();
     $('#app').innerHTML = `
       <div class="ptabs"><button id="toWords">🔤 Words</button><button aria-pressed="true">✍️ Type phrases</button></div>
+      ${!window.PHRASES || !window.SENTENCES ? `<p class="bad">Missing file on the website: ${[!window.PHRASES && 'phrases.js', !window.SENTENCES && 'sentences.js'].filter(Boolean).join(' and ')}. Upload it next to quiz.html.</p>` : ''}
       <p class="muted">See the English, type it in Jotsom. Accents and silent letters are forgiven but pointed out.</p>
       <h2>Which phrases?</h2>
       <div id="pcats">

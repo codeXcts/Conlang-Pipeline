@@ -21,14 +21,22 @@
     }
     return out;
   }
-  let list = parse(BUILTIN);
+  const CKEY = 'wl.sentences.txt';
+  const custom = () => { try { return JSON.parse(localStorage.getItem(CKEY)); } catch { return null; } };
+  let list = parse(custom() || BUILTIN);
+  // Looks like a sentence sheet? (lines of "English | jotsom | also | level", no markdown tables)
+  const isSheet = t => { const rows = t.split(/\r?\n/).filter(l => l.includes('|') && !l.trim().startsWith('#'));
+    return rows.length > 0 && !rows.some(l => l.trim().startsWith('|')) && parse(t).length > 0; };
+  function setCustom(text) { const p = parse(text); if (!p.length) return 0;
+    try { localStorage.setItem(CKEY, JSON.stringify(text)); } catch {} list = p; return p.length; }
+  function clearCustom() { try { localStorage.removeItem(CKEY); } catch {} list = parse(BUILTIN); }
   async function refresh() {
-    if (location.protocol === 'file:') return list;
+    if (location.protocol === 'file:' || custom()) return list;
     try {
       const r = await fetch('sentences.txt', { cache: 'no-store' });
       if (r.ok) { const p = parse(await r.text()); if (p.length) list = p; }
     } catch {}
     return list;
   }
-  window.SENTENCES = { load: () => list, refresh, parse, LEVELS };
+  window.SENTENCES = { load: () => list, refresh, parse, LEVELS, isSheet, setCustom, clearCustom, hasCustom: () => !!custom() };
 })();

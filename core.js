@@ -293,7 +293,9 @@
   // ---------- UI helpers ----------
   function toast(msg) {
     let t = $('#toast');
-    if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+    if (!t) { t = document.createElement('div'); t.id = 'toast'; }
+    const host = document.querySelector('dialog[open]') || document.body;   // a modal dialog covers everything else
+    if (t.parentNode !== host) host.appendChild(t);
     t.textContent = msg; t.classList.add('show');
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2400);
   }
@@ -336,11 +338,12 @@
     drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
     drop.ondragleave = () => drop.classList.remove('over');
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && read(e.dataTransfer.files[0]); };
-    $('[data-x]', d).onclick = () => { d.close(); d.remove(); };
+    const done = () => { const t = $('#toast', d); if (t) document.body.appendChild(t); d.close(); d.remove(); };
+    $('[data-x]', d).onclick = done;
     $('[data-go]', d).onclick = () => {
       try {
         const mode = $('input[name=m]:checked', d)?.value || 'replace';
-        if (opts.onText(ta.value, name, mode) !== false) { d.close(); d.remove(); }
+        if (opts.onText(ta.value, name, mode) !== false) done();
       } catch (err) { toast('Import failed: ' + err.message); }
     };
     d.showModal();
