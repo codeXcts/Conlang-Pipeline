@@ -27,6 +27,33 @@
   .end .score { font-size: 44px; font-weight: 800; }
   @keyframes pop { 0% { transform: scale(.6); opacity: 0 } 60% { transform: scale(1.2) } 100% { transform: scale(1); opacity: 1 } }
   .pop { animation: pop .35s ease-out; display: inline-block; }
+
+  /* phrase typing */
+  .ptabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .ptabs button { padding: 12px; font-size: 16px; font-weight: 700; border-radius: 14px; }
+  .ptabs button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pq { padding: 18px 14px; }
+  .pq .cat { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .pq .en { font-size: 24px; font-weight: 700; margin: 6px 0 2px; }
+  .pq .note { font-size: 13px; color: var(--muted); }
+  #typed { width: 100%; font-size: 22px; padding: 14px; border-radius: 14px; border-width: 2px; }
+  #typed.ok { border-color: var(--good); background: var(--good-soft); }
+  #typed.near { border-color: #e0a400; }
+  #typed.bad { border-color: var(--bad); background: var(--bad-soft); }
+  .keys { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+  .keys button { min-width: 38px; padding: 8px 6px; font-size: 18px; border-radius: 10px; }
+  .hintbox { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .hintbox span { background: var(--accent-soft); color: var(--accent); border-radius: 10px; padding: 5px 10px; font-size: 17px; font-weight: 600; }
+  .verdict { border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
+  .verdict.ok { background: var(--good-soft); } .verdict.near { background: #fff3c4; } .verdict.bad { background: var(--bad-soft); }
+  @media (prefers-color-scheme: dark) { .verdict.near { background: #3d3412; } }
+  .verdict .ans { font-size: 22px; font-weight: 800; margin: 4px 0; }
+  .wd { display: inline-block; margin-right: 6px; }
+  .wd.ok { color: var(--good); } .wd.typo { color: #c48a00; text-decoration: underline dotted; } .wd.bad { color: var(--bad); text-decoration: line-through; }
+  .wd.miss { color: var(--bad); font-weight: 800; }
+  .wbw2 { font-family: ui-monospace, monospace; font-size: 13px; color: var(--accent); }
+  .plist { font-size: 14px; }
+  .plist div { padding: 4px 0; border-bottom: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -34,9 +61,11 @@
 <main id="app"></main>
 
 <script src="core.js"></script>
+<script src="phrases.js"></script>
+<script src="sentences.js"></script>
 <script>
 (() => {
-  const { $, esc, store } = WL;
+  const { $, esc, store, toast } = WL;
   const CKEY = 'wl.quiz.cfg', BKEY = 'wl.quiz.best';
   let cfg = store.get(CKEY, { player: '', mode: 'w2m', group: 'things', len: 10 });
   let best = store.get(BKEY, {});
@@ -58,11 +87,13 @@
   const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
   function setup() {
-    if (!WL.words().length) { $('#app').innerHTML = WL.noWordsHTML(); return; }
+    inPhrase = false;
+    if (!WL.words().length) { $('#app').innerHTML = `<div class="ptabs"><button aria-pressed="true">🔤 Words</button><button id="toPhr">✍️ Type phrases</button></div>` + WL.noWordsHTML(); $('#toPhr').onclick = phraseSetup; return; }
     const groups = Object.entries(GROUPS).map(([k, g]) => [k, g, poolFor(k).length]).filter(([, , n]) => n >= 4);
     if (!groups.find(([k]) => k === cfg.group)) cfg.group = groups[0]?.[0] || 'all';
     const bestKey = `${cfg.player || 'anyone'}|${cfg.group}|${cfg.mode}`;
     $('#app').innerHTML = `
+      <div class="ptabs"><button aria-pressed="true">🔤 Words</button><button id="toPhr">✍️ Type phrases</button></div>
       <div class="card"><div class="row"><span class="grow" style="font-size:18px">Who's playing?</span>
         <input id="player" type="text" placeholder="Name" value="${esc(cfg.player)}" style="width:150px"></div></div>
       <h2>What words?</h2>
@@ -82,6 +113,7 @@
     bind('#lens', 'n', v => cfg.len = +v);
     $('#player').onchange = e => { cfg.player = e.target.value.trim(); store.set(CKEY, cfg); setup(); };
     $('#go').onclick = start;
+    $('#toPhr').onclick = phraseSetup;
   }
 
   function start() {
@@ -160,8 +192,226 @@
     $('#again').onclick = start; $('#menu').onclick = setup;
   }
 
-  document.addEventListener('wl:words', setup);
-  setup();
+
+  // =====================================================================
+  // ✍️ Phrase typing: see the English, type the Jotsom.
+  // =====================================================================
+  const PSKEY = 'wl.quiz.phr.stats', PCKEY = 'wl.quiz.phr.cfg';
+  let pstats = store.get(PSKEY, {});                       // phrase -> { seen, right, streak, last }
+  let pcfg = store.get(PCKEY, { cats: ['all'], len: 10, idioms: true });
+  const KEYS = ['ë', 'č', 'ğ', 'š', 'ž', 'ā', 'ē', 'ī', 'ō', 'ū', 'ą', 'ę', 'į', 'ų', 'ç', 'ş', "'"];
+
+  // normalising for comparison
+  const strip = s => s.toLowerCase().replace(/['’`]/g, '').replace(/[!?.,;:"“”«»()¿¡…—–-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const loose = s => WL.fold(s.replace(/[ąęįųçş]/g, ''));          // ignore accents and silent letters
+  const toks = s => strip(s).split(' ').filter(Boolean);
+  function lev(a, b) {
+    const m = a.length, n = b.length, d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+    for (let j = 1; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    return d[m][n];
+  }
+  // answers a phrase accepts: "sozunšta! / ugaršta tsa!" accepts either half or the whole
+  const answersOf = p => { const parts = p.phrase.split(/\s+\/\s+/); return [...(parts.length > 1 ? [...parts, p.phrase] : [p.phrase]), ...(p.alts || [])]; };
+
+  // word-by-word comparison (LCS alignment) -> verdict
+  function judge(typed, p) {
+    let best = null;
+    for (const ans of answersOf(p)) {
+      const A = toks(ans), T = toks(typed);
+      // align on loose forms
+      const la = A.map(loose), lt = T.map(loose);
+      const L = Array.from({ length: la.length + 1 }, () => Array(lt.length + 1).fill(0));
+      for (let i = la.length - 1; i >= 0; i--) for (let j = lt.length - 1; j >= 0; j--)
+        L[i][j] = (la[i] === lt[j] || lev(la[i], lt[j]) <= (la[i].length > 4 ? 1 : 0) && la[i].length > 2)
+          ? 1 + L[i+1][j+1] : Math.max(L[i+1][j], L[i][j+1]);
+      const out = []; let i = 0, j = 0, exact = 0, accent = 0, typo = 0, wrong = 0, missing = 0;
+      while (i < A.length || j < T.length) {
+        const match = i < A.length && j < T.length && (la[i] === lt[j] || (la[i].length > 2 && lev(la[i], lt[j]) <= (la[i].length > 4 ? 1 : 0)));
+        if (match && L[i][j] === 1 + L[i+1][j+1]) {
+          const kind = A[i] === T[j] ? 'ok' : la[i] === lt[j] ? 'accent' : 'typo';
+          kind === 'ok' ? exact++ : kind === 'accent' ? accent++ : typo++;
+          out.push({ t: T[j], a: A[i], kind }); i++; j++;
+        } else if (j < T.length && (i >= A.length || L[i][j+1] >= L[i+1][j])) { out.push({ t: T[j], kind: 'bad' }); wrong++; j++; }
+        else { out.push({ a: A[i], kind: 'miss' }); missing++; i++; }
+      }
+      const score = exact * 3 + accent * 2 + typo - wrong * 2 - missing * 2;
+      const r = { ans, out, exact, accent, typo, wrong, missing, score, n: A.length };
+      if (!best || r.score > best.score) best = r;
+    }
+    const b = best;
+    b.level = (b.wrong || b.missing) ? 'bad' : (b.accent || b.typo) ? 'near' : 'ok';
+    if (b.level === 'bad') {
+      const squash = x => strip(x).replace(/ /g, '');
+      for (const ans of answersOf(p)) if (loose(squash(ans)) === loose(squash(typed))) {
+        b.ans = ans; b.out = toks(ans).map(a => ({ t: a, a, kind: 'typo' })); b.level = 'near'; b.wrong = b.missing = 0; break;
+      }
+    }
+    // word order: all words right but in another order shows as wrong+missing; detect it
+    if (b.level === 'bad') {
+      const A = toks(b.ans).map(loose).sort().join(' '), T = toks(typed).map(loose).sort().join(' ');
+      if (A === T) b.order = true;
+    }
+    return b;
+  }
+
+  const allPhrases = () => [...PHRASES.load().filter(p => p.cat !== 'Pet names'), ...SENTENCES.load()];
+  let sentencesFresh = false;
+  function phrasePool() {
+    const all = allPhrases().filter(p => toks(p.phrase).length >= 1);
+    return all.filter(p => (pcfg.cats.includes('all') ? (pcfg.idioms || !['Idioms', 'Proverbs'].includes(p.cat)) : pcfg.cats.includes(p.cat)));
+  }
+  function pickRound(pool) {
+    // weight: never seen and recently missed first, well-known ones rarely
+    const now = Date.now();
+    const w = p => { const s = pstats[p.phrase]; if (!s) return 3 + Math.random();
+      return (s.streak >= 3 ? .3 : s.streak ? 1 : 2.5) + Math.min(2, (now - (s.last || 0)) / 864e5 / 3) + Math.random(); };
+    return [...pool].sort((a, b) => w(b) - w(a)).slice(0, Math.min(pcfg.len, pool.length)).sort(() => Math.random() - .5);
+  }
+
+  let inPhrase = false;
+  function phraseSetup() {
+    inPhrase = true;
+    if (!sentencesFresh) { sentencesFresh = true; SENTENCES.refresh().then(() => { if ($('#pgo')) phraseSetup(); }); }
+    const all = allPhrases();
+    const cats = [...new Set(all.map(p => p.cat))];
+    const pbCats = cats.filter(c => !/^Level|^Sentences/.test(c)), sCats = cats.filter(c => /^Level|^Sentences/.test(c));
+    const catBtn = c => `<button data-c="${esc(c)}" aria-pressed="${pcfg.cats.includes(c)}">${esc(c)}<br><small class="muted">${all.filter(p => p.cat === c).length}</small></button>`;
+    const known = all.filter(p => (pstats[p.phrase]?.streak || 0) >= 3).length;
+    const pool = phrasePool();
+    $('#app').innerHTML = `
+      <div class="ptabs"><button id="toWords">🔤 Words</button><button aria-pressed="true">✍️ Type phrases</button></div>
+      <p class="muted">See the English, type it in Jotsom. Accents and silent letters are forgiven but pointed out.</p>
+      <h2>Which phrases?</h2>
+      <div id="pcats">
+        <div class="pick" style="grid-template-columns:1fr"><button data-c="all" aria-pressed="${pcfg.cats.includes('all')}">⭐ Everything (${all.length})</button></div>
+        <div class="muted" style="margin:10px 0 6px">Sentences</div>
+        <div class="pick" style="grid-template-columns:1fr 1fr">${sCats.map(catBtn).join('')}</div>
+        <div class="muted" style="margin:10px 0 6px">Phrasebook</div>
+        <div class="pick" style="grid-template-columns:1fr 1fr">${pbCats.map(catBtn).join('')}</div></div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="pid" ${pcfg.idioms ? 'checked' : ''}> Include idioms and proverbs in “All”</label>
+      <h2>How many?</h2>
+      <div class="pick" id="plen" style="grid-template-columns:repeat(3,1fr)">${[5, 10, 20].map(n => `<button data-n="${n}" aria-pressed="${pcfg.len === n}">${n}</button>`).join('')}</div>
+      <p class="muted" style="text-align:center">${known} of ${all.length} phrases mastered (3 right in a row)</p>
+      <button class="primary" id="pgo" style="width:100%; padding:18px; font-size:20px; border-radius:16px" ${pool.length ? '' : 'disabled'}>✍️ Start (${Math.min(pcfg.len, pool.length)})</button>
+      <details style="margin-top:16px"><summary class="muted">My phrase progress</summary><div class="plist">
+        ${all.map(p => { const s = pstats[p.phrase]; return `<div>${s ? (s.streak >= 3 ? '✅' : s.streak ? '🟡' : '🔴') : '⚪'} <b>${esc(p.phrase)}</b> <span class="muted">${esc(p.meaning)}</span></div>`; }).join('')}
+      </div><button class="chip" id="preset" style="margin-top:8px">Reset phrase progress</button></details>`;
+    $('#toWords').onclick = setup;
+    $('#pcats').querySelectorAll('button').forEach(b => b.onclick = () => {
+      const c = b.dataset.c;
+      if (c === 'all') pcfg.cats = ['all'];
+      else { pcfg.cats = pcfg.cats.filter(x => x !== 'all'); pcfg.cats = pcfg.cats.includes(c) ? pcfg.cats.filter(x => x !== c) : [...pcfg.cats, c]; if (!pcfg.cats.length) pcfg.cats = ['all']; }
+      store.set(PCKEY, pcfg); phraseSetup();
+    });
+    $('#pid').onchange = e => { pcfg.idioms = e.target.checked; store.set(PCKEY, pcfg); phraseSetup(); };
+    $('#plen').querySelectorAll('button').forEach(b => b.onclick = () => { pcfg.len = +b.dataset.n; store.set(PCKEY, pcfg); phraseSetup(); });
+    $('#pgo').onclick = () => phraseRound(pickRound(pool));
+    $('#preset').onclick = () => { if (confirm('Reset all phrase progress?')) { pstats = {}; store.set(PSKEY, pstats); phraseSetup(); } };
+  }
+
+  function phraseRound(qs) {
+    let i = 0, score = 0;
+    const results = [];
+    function ask() {
+      if (i >= qs.length) return phraseEnd(qs, results, score);
+      const p = qs[i];
+      let hinted = 0, checked = false;
+      const words = toks(answersOf(p)[0]);
+      $('#app').innerHTML = `
+        <div class="hud"><span>${i + 1} / ${qs.length}</span><span>⭐ ${score}</span><button id="pquit" class="chip">Stop</button></div>
+        <div class="card pq"><div class="cat">${esc(p.cat)}</div><div class="en">${esc(p.meaning)}</div>
+</div>
+        <input id="typed" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Type it in Jotsom…">
+        <div class="keys" id="keys">${KEYS.map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
+        <div class="hintbox" id="hint"></div>
+        <div class="row" id="btns">
+          <button id="hintBtn">💡 Hint</button><button id="giveup" class="chip">Show answer</button>
+          <span class="grow"></span><button class="primary" id="check" style="padding:12px 22px">Check</button></div>
+        <div id="verdict"></div>`;
+      const inp = $('#typed');
+      inp.focus();
+      $('#pquit').onclick = phraseSetup;
+      $('#keys').onclick = e => {
+        const k = e.target.closest('[data-k]'); if (!k) return;
+        const a = inp.selectionStart ?? inp.value.length, b = inp.selectionEnd ?? a;
+        inp.value = inp.value.slice(0, a) + k.dataset.k + inp.value.slice(b);
+        inp.focus(); inp.setSelectionRange(a + 1, a + 1);
+      };
+      $('#hintBtn').onclick = () => {
+        hinted++;
+        if (hinted === 1) {
+          let sh = shuffle([...words]);
+          if (sh.length > 1) for (let t = 0; t < 5 && sh.join(' ') === words.join(' '); t++) sh = shuffle(sh);
+          $('#hint').innerHTML = sh.map(w => `<span>${esc(w)}</span>`).join('');
+          $('#hintBtn').textContent = '💡 First letters';
+        } else {
+          $('#hint').innerHTML = `<span style="background:none; padding:0" class="muted">In order:</span>` +
+            words.map(w => `<span>${esc(w[0])}${'·'.repeat(Math.max(0, [...w].length - 1))}</span>`).join('');
+          $('#hintBtn').disabled = true;
+        }
+      };
+      const finish = (v, gaveUp) => {
+        checked = true;
+        const s = pstats[p.phrase] || { seen: 0, right: 0, streak: 0 };
+        s.seen++; s.last = Date.now();
+        const good = !gaveUp && v.level !== 'bad';
+        if (good) { s.right++; s.streak = hinted ? Math.max(1, s.streak) : s.streak + 1; score += hinted ? 0.5 : 1; }
+        else s.streak = 0;
+        pstats[p.phrase] = s; store.set(PSKEY, pstats);
+        results.push({ p, good, hinted, level: gaveUp ? 'bad' : v.level });
+        inp.disabled = true; inp.className = gaveUp ? 'bad' : v.level;
+        const msg = gaveUp ? 'Here it is:' : v.level === 'ok' ? (hinted ? '✔ Right (with a hint)' : '🎉 Perfect!')
+          : v.level === 'near' ? '👍 Right, but check the spelling' : v.order ? '🔀 Right words, wrong order' : '✗ Not quite';
+        const diff = gaveUp ? '' : v.out.map(o => o.kind === 'ok' ? `<span class="wd ok">${esc(o.t)}</span>`
+          : o.kind === 'accent' || o.kind === 'typo' ? `<span class="wd typo" title="${esc(o.a)}">${esc(o.t)}</span>`
+          : o.kind === 'bad' ? `<span class="wd bad">${esc(o.t)}</span>` : `<span class="wd miss">[${esc(o.a)}]</span>`).join('');
+        $('#verdict').innerHTML = `<div class="verdict ${gaveUp ? 'bad' : v.level}"><div><b>${msg}</b></div>
+          ${diff ? `<div style="margin:4px 0">${diff}</div>` : ''}
+          <div class="ans">${esc(p.phrase)}</div>
+          ${p.wbw ? `<div class="wbw2">${esc(p.wbw)}</div>` : ''}
+          ${p.note ? `<div class="muted" style="font-size:13px; margin-top:4px">${esc(p.note)}</div>` : ''}
+          ${v && v.level === 'near' ? `<div class="muted" style="font-size:13px">Dotted words: right word, different spelling (accents or silent letters).</div>` : ''}
+          ${!good && !gaveUp ? `<button class="chip" id="mine" style="margin-top:6px">I was right (count it)</button>` : ''}</div>
+          <div class="row" style="justify-content:flex-end; margin-top:10px">
+            <a href="glosser.html?t=${encodeURIComponent(p.phrase)}" target="_blank"><button class="chip">Break it down</button></a>
+            <button class="primary" id="next" style="padding:12px 22px">Next →</button></div>`;
+        $('#btns').style.display = 'none'; $('#keys').style.display = 'none';
+        $('#next').onclick = () => { i++; ask(); };
+        $('#next').focus();
+        if ($('#mine')) $('#mine').onclick = () => {
+          const st = pstats[p.phrase]; st.right++; st.streak = 1; store.set(PSKEY, pstats);
+          results[results.length - 1].good = true; score += 1; $('#mine').remove(); toast('Counted as right');
+        };
+      };
+      $('#check').onclick = () => { if (!inp.value.trim()) { inp.focus(); return; } finish(judge(inp.value, p), false); };
+      $('#giveup').onclick = () => finish(null, true);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !checked) { e.preventDefault(); $('#check').click(); } });
+    }
+    ask();
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Enter' && document.activeElement?.id === 'next') { e.preventDefault(); $('#next').click(); } });
+
+  function phraseEnd(qs, results, score) {
+    const pct = score / qs.length;
+    const missed = results.filter(r => !r.good);
+    $('#app').innerHTML = `<div class="end">
+      <div class="stars">${'⭐'.repeat(pct >= .95 ? 3 : pct >= .7 ? 2 : pct >= .4 ? 1 : 0)}${'☆'.repeat(3 - (pct >= .95 ? 3 : pct >= .7 ? 2 : pct >= .4 ? 1 : 0))}</div>
+      <div class="score">${score % 1 ? score.toFixed(1) : score} / ${qs.length}</div>
+      <p style="font-size:18px">${pct >= .95 ? 'Flawless! 🏆' : pct >= .7 ? 'Strong work 💪' : 'Keep at it, it sticks with practice'}</p>
+      ${missed.length ? `<div class="card" style="text-align:left"><b>Practice these</b>${missed.map(r => `<div style="margin-top:6px"><b>${esc(r.p.phrase)}</b><br><span class="muted">${esc(r.p.meaning)}</span></div>`).join('')}</div>` : ''}
+      <div class="row" style="justify-content:center; margin-top:14px">
+        ${missed.length ? `<button class="primary" id="redo" style="padding:14px 18px; font-size:17px">Retry missed (${missed.length})</button>` : ''}
+        <button class="${missed.length ? '' : 'primary'}" id="again" style="padding:14px 18px; font-size:17px">New round</button>
+        <button id="menu" style="padding:14px 18px; font-size:17px">Menu</button></div></div>`;
+    if ($('#redo')) $('#redo').onclick = () => phraseRound(shuffle(missed.map(r => r.p)));
+    $('#again').onclick = () => phraseRound(pickRound(phrasePool()));
+    $('#menu').onclick = phraseSetup;
+  }
+
+  document.addEventListener('wl:words', () => { if (!inPhrase) setup(); });
+  if (location.hash === '#phrases') phraseSetup(); else setup();
 })();
 </script>
 </body>

@@ -1,0 +1,154 @@
+# Quiz sentences (150): English | family language
+# Level 1 = simple, 2 = everyday, 3 = extras/phrases, 4 = clauses and complex
+# Subject is dropped when clear (the app should accept the natural form). If a 4th column is given, that is the same sentence with the subject said, also correct.
+# English | natural form | also accepted (subject said) | level
+I ate cheese. | mağika tsufe | mağika tsufe sa | 1
+I drink water. | lëdel ūfo | lëdel ūfo sa | 1
+I see the dog. | miro kabo | miro kabo sa | 1
+I eat bread. | maği pųwan | maği pųwan sa | 1
+I love my family. | amu jōsinsa | amu jōsinsa sa | 1
+I want milk. | vam lamde | vam lamde sa | 1
+I like cheese. | dol tsufe | dol tsufe sa | 1
+I have a dog. | gus kabo | gus kabo sa | 1
+I read a book. | sër liber | sër liber sa | 1
+I hear the bird. | lir žafa | lir žafa sa | 1
+The baby cries. | dzën tsumfi | - | 1
+Grandma sings. | ūtu dzūli | - | 1
+The cat sleeps. | dur minu | - | 1
+The man comes. | ven gātsu | - | 1
+The woman works. | travaj dzumi | - | 1
+The bread is warm. | hëg pųwan | - | 1
+The soup is hot. | žom suba | - | 1
+Mom is tired. | hël vuno | - | 1
+Dad is at home. | a baši an dzom | - | 1
+I am at home. | a d'an dzom | a sa an dzom | 1
+I am hungry. | pelda | pelda sa | 1
+Are you hungry? | ğa pelda? | ğa pelda to? | 1
+Dad is not tired. | nie hël baši | - | 1
+You eat fish. | maği slil to | - | 1
+He sees Dad. | miro baši ža | - | 1
+She reads a book. | sër liber ža | - | 1
+I love you. | amu to | amu to sa | 1
+I see my dad. | miro bašisa | miro bašisa sa | 1
+My grandma is tired. | hël dzūlisa | - | 1
+Your mom is here. | a vunoto nëtsu | - | 1
+I ate cheese yesterday. | mağika tsufe zūti | mağika tsufe sa zūti | 2
+I will eat bread tomorrow. | mağiši pųwan mūju | mağiši pųwan sa mūju | 2
+I drank water today. | lëdelka ūfo jēha | lëdelka ūfo sa jēha | 2
+I went to the market. | zla pa merkado | zla sa pa merkado | 2
+I went to school. | zla pa l'ekol | zla sa pa l'ekol | 2
+I walked to the sea. | ğurka pa wadzu | ğurka sa pa wadzu | 2
+The boy ran to the door. | ğolka gātsube pa wulto | - | 2
+We (including you) ate at home. | mağika hi an dzom | - | 2
+We (not you) slept at home. | durka ro an dzom | - | 2
+I did not eat meat. | nie mağika fegu | nie mağika fegu sa | 2
+I never eat meat. | ūwin maği fegu | ūwin maği fegu sa | 2
+Did you eat bread? | ğa mağika pųwan? | ğa mağika pųwan to? | 2
+Where is Dad? | a baši kamas? | - | 2
+Who eats bread? | maği pųwan kulom? | - | 2
+What do you eat? | maği kela? | maği kela to? | 2
+When will you eat? | mağiši kohra? | mağiši to kohra? | 2
+Why did you cry? | dzënka kalra? | dzënka to kalra? | 2
+How do you cook fish? | bëčin slil kluhem? | bëčin slil to kluhem? | 2
+Eat the bread! | mağišta pųwan! | - | 2
+Don't run! | nie ğolšta! | - | 2
+Come here! | venšta nëtsu! | - | 2
+Wash your hands! | hifošta ze cimu! | - | 2
+Sleep well! | duršta ğal! | - | 2
+Let's eat! | šta maği hi | - | 2
+I have two children. | gus nano fube | gus nano fube sa | 2
+I ate three breads. | mağika tru pųwan | mağika tru pųwan sa | 2
+There is bread at home. | nājol pųwan an dzom | - | 2
+There is no bread. | nājol nu pųwan | - | 2
+Is there any bread? | ğa nājol fe pųwan? | - | 2
+I am eating bread. | ona maği pųwan | ona maği pųwan sa | 2
+I have already eaten. | uce maği | uce maği sa | 2
+The water is very hot. | šo žom ūfo | - | 2
+I ate all the bread. | mağika kųwu pųwan | mağika kųwu pųwan sa | 2
+I ate only bread. | mağika dza pųwan | mağika dza pųwan sa | 2
+Dad likes bread too. | dol pųwan fo baši | - | 2
+Dad is bigger than me. | zan bru baši ği sa | - | 2
+Dad ate bread at home. | mağika pųwan baši an dzom | - | 2
+Dad and I ate bread. | mağika pųwan baši i sa | - | 2
+Open the door! | ohašta wulto! | - | 2
+Sit on the chair! | tsošta losan wenur! | - | 2
+Look at this house! | mirošta nuge dzom! | - | 2
+Be quiet! | ëbjašta! | - | 2
+Grandpa drinks tea in the morning. | lëdel wildu ōzul an unval | - | 3
+We (not you) eat at the pause. | maği ro an jōva | - | 3
+I'll see you this evening. | miroši to an ofra | miroši to an ofra sa | 3
+Dad was tired. | hëlka baši | - | 3
+The bread was delicious. | frūtsuka pųwan | - | 3
+Mom cooked soup for Dad. | bëčinka suba vuno o baši | - | 3
+Dad gave me bread. | fazomka pųwan baši pa sa | - | 3
+I told the children a story. | dōka mečos pa l'abu | dōka mečos sa pa l'abu | 3
+Pour Dad some water. | plëzošta ūfo pa baši! | - | 3
+We (including you) will eat here. | mağiši hi nëtsu | - | 3
+The cat is under the table. | a minu lusin tobas | - | 3
+The bread is on the table. | a pųwan losan tobas | - | 3
+The bird is between the trees. | a žafa ile ze bler | - | 3
+I walked through the forest. | ğurka clodo duwesro | ğurka sa clodo duwesro | 3
+I eat bread without oil. | maği pųwan juro hol | maği pųwan sa juro hol | 3
+Dad usually eats bread at home. | dzeda maği pųwan baši an dzom | - | 3
+Grandma always cooks stew. | tōtsol bëčin cānë dzūli | - | 3
+I sometimes eat meat. | zjeno maği fegu | zjeno maği fegu sa | 3
+I'm still hungry. | tsilo pelda | tsilo pelda sa | 3
+Dad is still working. | tsilo travaj baši | - | 3
+I'm almost ready. | mudz omto | mudz omto sa | 3
+It's too late! | te dzūši! | - | 3
+I ate too much. | mağika te fes | mağika te fes sa | 3
+I'm really tired. | moču hël | moču hël sa | 3
+How big! | kluhem bru! | - | 3
+What a house! | kela dzom! | - | 3
+Dad's late, right? | dzūši baši, ne? | - | 3
+Wow, it's delicious! | wa, frūtsu! | - | 3
+Come on, eat! | ale, mağišta! | - | 3
+Whose is this? | a nuge kula? | - | 3
+This is mine. | a nuge da sa | - | 3
+This toy is Dad's. | a nuge žųwe da baši | - | 3
+My name is Chilly. | kla ce Chilly | - | 3
+What's your name? | kla ce kela to? | - | 3
+Write your name, please. | clušta fašu, klubi | - | 3
+Grandma, he's alone! | Dzūli, umtël ža! | - | 3
+Don't eat alone! | nie jōžešta! | - | 3
+Share the pause with us! | wonšešta jōva tse ro! | - | 3
+Shall we eat here or at the house? | ğa mağiši hi nëtsu u m'an dzom? | - | 3
+Have you already eaten? | ğa r'uce maği? | ğa r'uce maği to? | 3
+Mom said Dad is late. | dëmka vuno da dzūši baši | - | 4
+I think Dad is coming. | anze da ven baši | anze sa da ven baši | 4
+I don't know if Dad is coming. | nie ner si ven baši | nie ner sa si ven baši | 4
+I don't know where Dad is. | nie ner a baši kamas | nie ner sa a baši kamas | 4
+Tell the boss I'm late. | dëmšta pa šef da dzūši sa! | - | 4
+I eat the bread Dad made. | maği pųwan da mōka tsa baši | maği pųwan sa da mōka tsa baši | 4
+I know the man who saw Dad. | ner gātsu da miroka baši | ner gātsu sa da miroka baši | 4
+When Dad comes, we'll eat. | an ven baši, mağiši hi | - | 4
+Don't talk while you're eating! | nie munšta an ona maği! | - | 4
+Wash your hands before eating. | hifošta cimu ije maği | - | 4
+We'll eat after you finish. | mağiši hi afa metsu to | - | 4
+I'll wait until Dad comes. | ēto pa ven baši | ēto sa pa ven baši | 4
+I'm sleeping because I'm tired. | dur o hël | dur sa o hël | 4
+If you're hungry, eat bread! | si pelda to, mağišta pųwan! | - | 4
+Even though it rained, we went to the market. | orko si dzučoka, zla pa merkado ro | - | 4
+Be quiet so the kids can sleep! | ëbjašta pa da dur abu! | - | 4
+I went to buy bread. | zla komprare pųwan | zla sa komprare pųwan | 4
+If I had known, I would have come. | si nerka sa, venkaši sa | - | 4
+If I had money, I would buy a car. | si gūka aržan, komprarekaši vųwatur | - | 4
+I would like some water. | vamkaši fe ūfo | vamkaši fe ūfo sa | 4
+I have to go. | pafi vo | pafi vo sa | 4
+Grandma said: "Carry two baskets to the market!" | dëmka dzūli: "Ğibšta nano banāta pa merkado!" | - | 4
+Could you help me? | ğa šar tudzas sa to? | - | 4
+I used to eat meat. | dolka maği fegu | dolka maği fegu sa | 4
+You should go. | pafikaši vo | pafikaši vo to | 4
+You can do it! | šar dze tsa to! | - | 4
+I can't do it. | nie šar dze tsa sa | - | 4
+I like the city where I live. | dol vil da dzor sa nājol | dol sa vil da dzor sa nājol | 4
+I remember the day he came. | zadza žurne da venka ža an tsa | zadza sa žurne da venka ža an tsa | 4
+The man who gave it to me was your mom's grandfather. | gātsu da fazomka tsa pa sa, e d'ōzul da vunoto ža | - | 4
+He is three years old. | a tru ane ža | - | 4
+How old is it? | a kela ane tsa? | - | 4
+The child was two years old. | e nano ane fube | - | 4
+We'll eat at three o'clock. | mağiši hi an tru ër | - | 4
+The tourist asked in French. | rëşka turīt an fransa | - | 4
+I saw him three days ago. | miroka ža tru žurne çūlën | miroka sa ža tru žurne çūlën | 4
+There is a man who is shouting at the door. | nājol gātsu da tsųwor an wulto | - | 4
+In the morning, Grandma picked lots of lemons. | an unval, kuska fes čavi dzūli | - | 4
